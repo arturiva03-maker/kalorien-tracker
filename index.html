@@ -683,10 +683,14 @@ async function preprocess(file){
     px[i]=g; hist[g]++;
   }
   const total=px.length/4;
+  // 0,5 % Ausreißer kappen; bei fast einfarbigen Bildern (z. B. weißes Etikett
+  // mit wenig Text) nicht strecken, sonst wird alles schwarz
+  const clip=total*.005;
   let lo=0,hi=255,acc=0;
-  for(let i=0;i<256;i++){ acc+=hist[i]; if(acc>total*.05){lo=i;break;} }
+  for(let i=0;i<256;i++){ acc+=hist[i]; if(acc>clip){lo=i;break;} }
   acc=0;
-  for(let i=255;i>=0;i--){ acc+=hist[i]; if(acc>total*.05){hi=i;break;} }
+  for(let i=255;i>=0;i--){ acc+=hist[i]; if(acc>clip){hi=i;break;} }
+  if(hi-lo<40){ lo=0; hi=255; }
   const range=Math.max(1,hi-lo);
   for(let i=0;i<px.length;i+=4){
     const v=Math.max(0,Math.min(255,(px[i]-lo)*255/range));
