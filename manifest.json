@@ -1,0 +1,13 @@
+{
+  "name": "Brennwert – Kalorientagebuch",
+  "short_name": "Brennwert",
+  "description": "Nährwerttabelle abfotografieren, Kalorien tracken. Simpel, privat, ohne Konto.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F6F1E7",
+  "theme_color": "#F6F1E7",
+  "lang": "de",
+  "icons": [
+    { "src": "icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ]
+}
