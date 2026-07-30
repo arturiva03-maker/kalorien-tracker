@@ -803,7 +803,7 @@ function showScanResult(parsed){
 
   const foundCount = Object.keys(parsed.found).length;
   $('#ocrHint').innerHTML = foundCount
-    ? (Object.values(parsed.values).every(v=>v!=null)
+    ? (NUTRI_FIELDS.every(f=>parsed.values[f.key]!=null)
         ? 'Alle Werte erkannt — kurz prüfen, dann eintragen.'
         : `<b>Rot markierte Felder</b> wurden nicht sicher erkannt — bitte vom Etikett übernehmen.`)
     : `<b>Keine Werte erkannt.</b> Foto näher &amp; gerader aufnehmen — oder Werte von Hand eintragen.`;
