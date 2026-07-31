@@ -426,15 +426,35 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
     <div class="grabber"></div>
     <h3 id="entName">Eintrag</h3>
     <div class="sub" id="entInfo"></div>
-    <table class="nutri cols3" id="entTable"></table>
-    <div class="field hidden" id="entGramsWrap" style="margin:14px 0 0">
-      <label>Menge für die Umrechnung (<span id="entUnit">g</span>)</label>
-      <input type="number" id="entGrams" inputmode="decimal" placeholder="z. B. 120">
+    <div id="entView">
+      <table class="nutri cols3" id="entTable"></table>
+      <div class="field hidden" id="entGramsWrap" style="margin:14px 0 0">
+        <label>Menge für die Umrechnung (<span id="entUnit">g</span>)</label>
+        <input type="number" id="entGrams" inputmode="decimal" placeholder="z. B. 120">
+      </div>
+      <div class="hint" id="entHint"></div>
+      <div class="sheet-btns">
+        <button class="btn btn-green btn-block" id="btnEntEdit">Werte bearbeiten</button>
+        <button class="btn btn-ghost btn-block" id="btnEntToProd">In Produkte speichern</button>
+        <button class="btn btn-ghost btn-block" id="btnEntDelete" style="box-shadow:none;border-color:var(--coral);color:var(--coral)">Eintrag löschen</button>
+      </div>
     </div>
-    <div class="hint" id="entHint"></div>
-    <div class="sheet-btns">
-      <button class="btn btn-green btn-block" id="btnEntToProd">In Produkte speichern</button>
-      <button class="btn btn-ghost btn-block" id="btnEntDelete" style="box-shadow:none;border-color:var(--coral);color:var(--coral)">Eintrag löschen</button>
+
+    <div id="entEdit" class="hidden">
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="eName">
+      </div>
+      <div class="field">
+        <label>Menge (<span id="eUnit">g</span>)</label>
+        <input type="number" id="eGrams" inputmode="decimal" placeholder="ohne Angabe">
+      </div>
+      <div class="hint" id="eScaleHint"></div>
+      <div class="nutri-grid" id="eNutri"></div>
+      <div class="sheet-btns">
+        <button class="btn btn-green btn-block" id="btnEntSave">Änderungen speichern</button>
+        <button class="btn btn-ghost btn-block" id="btnEntCancel">Abbrechen</button>
+      </div>
     </div>
   </div>
 </div>
@@ -823,7 +843,12 @@ function openEntry(id){
     : g ? 'Wird mit den Werten pro 100 '+unit+' gespeichert.'
         : `<b>Menge fehlt</b> — ohne sie lässt sich nicht auf 100 ${unit} umrechnen.`;
 
+  showEntryMode('view');
   openSheet('sheetEntry');
+}
+function showEntryMode(mode){
+  $('#entView').classList.toggle('hidden', mode!=='view');
+  $('#entEdit').classList.toggle('hidden', mode!=='edit');
 }
 $('#btnEntToProd').addEventListener('click',()=>{
   const e=entryDetail; if(!e) return;
@@ -848,6 +873,64 @@ $('#btnEntDelete').addEventListener('click',()=>{
   entries = entries.filter(x=>x.id!==entryDetail.id);
   save(LS.entries,entries); renderToday(); renderHistory(); closeSheet();
   toast('Eintrag gelöscht');
+});
+
+/* ── Eintrag bearbeiten ──────────────────────────────
+   Bearbeitet werden die Werte DIESER Portion, nicht die pro 100 g.
+   Wer die Menge ändert, meint fast immer "ich hatte mehr davon" —
+   deshalb skalieren die Nährwerte proportional mit. Wer sie danach
+   von Hand überschreibt, behält das letzte Wort. */
+const r1 = n => Math.round(n*10)/10;
+let editGrams = null;      // Menge, auf der die aktuellen Feldwerte beruhen
+
+$('#btnEntEdit').addEventListener('click',()=>{
+  const e=entryDetail; if(!e) return;
+  const unit=e.unit||'g';
+  $('#eName').value = e.name;
+  $('#eUnit').textContent = unit;
+  $('#eGrams').value = e.grams>0 ? e.grams : '';
+  editGrams = e.grams>0 ? e.grams : null;
+  $('#eScaleHint').textContent = editGrams
+    ? `Änderst du die Menge, rechnen sich alle Werte mit hoch oder runter.`
+    : `Ohne Mengenangabe bleiben die Werte beim Ändern der Menge unverändert.`;
+  $('#eNutri').innerHTML = NUTRI_FIELDS.map(f=>`
+    <div class="field">
+      <label>${f.label}</label>
+      <input type="number" step="any" inputmode="decimal" data-e="${f.key}"
+             value="${f.key==='kcal' ? Math.round(e.kcal||0) : r1(e[f.key]||0)}">
+    </div>`).join('');
+  showEntryMode('edit');
+  setTimeout(()=>$('#eGrams').focus(),50);
+});
+
+$('#eGrams').addEventListener('input',()=>{
+  const g=parseFloat($('#eGrams').value);
+  if(!(g>0)){ return; }                       // leeres Feld: nichts skalieren
+  if(!(editGrams>0)){ editGrams=g; return; }  // vorher ohne Menge: nur merken
+  const k=g/editGrams;
+  $$('#eNutri input').forEach(i=>{
+    const v=parseFloat(i.value)||0;
+    i.value = i.dataset.e==='kcal' ? Math.round(v*k) : r1(v*k);
+  });
+  editGrams=g;
+});
+
+$('#btnEntCancel').addEventListener('click',()=>{ openEntry(entryDetail.id); });
+
+$('#btnEntSave').addEventListener('click',()=>{
+  const name=$('#eName').value.trim();
+  if(!name){ toast('Name fehlt'); $('#eName').focus(); return; }
+  const e = entries.find(x=>x.id===entryDetail.id);
+  if(!e){ closeSheet(); return; }
+  const g=parseFloat($('#eGrams').value);
+  e.name  = name;
+  e.grams = g>0 ? g : null;
+  $$('#eNutri input').forEach(i=>{ e[i.dataset.e] = parseFloat(i.value)||0; });
+  e.kcal = Math.round(e.kcal);
+  save(LS.entries,entries);
+  renderToday(); renderHistory();
+  entryDetail=e; openEntry(e.id);
+  toast('Eintrag aktualisiert ✓');
 });
 
 /* ═══════════ Portion-Sheet ═══════════ */

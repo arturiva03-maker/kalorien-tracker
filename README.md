@@ -8,6 +8,7 @@ Simpler Kalorientracker: **Nährwerttabelle abfotografieren → Werte werden erk
 - Optionale Online-Suche bei Open Food Facts für Markenprodukte
 - Produkte landen nur in der Bibliothek, wenn man „In Produkte speichern" antippt — beim Scan wie beim manuellen Eintrag
 - Tageseinträge antippen zeigt alle Nährwerte (Portion und pro 100 g) und übernimmt sie auf Wunsch in die Produkte
+- Eingetragene Werte lassen sich nachträglich korrigieren; ändert man dabei die Menge, skalieren die Nährwerte mit
 - Verlauf der letzten 14 Tage, Tagesziel einstellbar
 - Alle Daten bleiben lokal im Browser (localStorage), Backup als JSON-Export/-Import
 
