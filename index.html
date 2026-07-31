@@ -1266,23 +1266,34 @@ async function getWorker(onProgress){
   return ocrWorker;
 }
 
-async function preprocess(file){
-  // <img> statt createImageBitmap: wendet die EXIF-Drehung von Handyfotos in
-  // allen Browsern an. createImageBitmap ignoriert sie je nach Browser — die
-  // OCR bekäme das Etikett um 90° gekippt und läse gar nichts.
+// <img> statt createImageBitmap: wendet die EXIF-Drehung von Handyfotos in
+// allen Browsern an. createImageBitmap ignoriert sie je nach Browser — die
+// OCR bekäme das Etikett um 90° gekippt und läse gar nichts.
+async function loadImage(file){
   const url=URL.createObjectURL(file);
-  const img = await new Promise((res,rej)=>{
+  return new Promise((res,rej)=>{
     const i=new Image();
     i.onload=()=>res(i); i.onerror=()=>rej(new Error('Bild nicht lesbar'));
     i.src=url;
   }).finally(()=>URL.revokeObjectURL(url));
-  const targetW = Math.min(1700, Math.max(1200, img.naturalWidth));
-  const scale = targetW/img.naturalWidth;
-  const w=Math.round(img.naturalWidth*scale), h=Math.round(img.naturalHeight*scale);
+}
+
+async function preprocess(file){
+  return prepCanvas(await loadImage(file));
+}
+
+/* Graustufen + Kontrast-Streckung, auf Arbeitsgröße skaliert.
+   src: Bild oder Canvas; sw/sh/sx/sy schneiden optional einen Ausschnitt aus. */
+function prepCanvas(src, rect, targetW){
+  const natW = src.naturalWidth||src.width, natH = src.naturalHeight||src.height;
+  const r = rect || {x:0,y:0,w:natW,h:natH};
+  targetW = targetW || Math.min(1700, Math.max(1200, r.w));
+  const scale = targetW/r.w;
+  const w=Math.round(r.w*scale), h=Math.round(r.h*scale);
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   const ctx=c.getContext('2d',{willReadFrequently:true});
   ctx.imageSmoothingQuality='high';   // billige Standard-Skalierung macht feine Schrift zu Brei
-  ctx.drawImage(img,0,0,w,h);
+  ctx.drawImage(src, r.x, r.y, r.w, r.h, 0, 0, w, h);
   // Graustufen + Kontrast-Streckung (5.–95. Perzentil)
   const d=ctx.getImageData(0,0,w,h), px=d.data;
   const hist=new Array(256).fill(0);
@@ -1355,6 +1366,36 @@ function adaptiveBinarize(src, flip){
   return c;
 }
 
+/* Wo steht die Nährwerttabelle? Aus den Wort-Koordinaten des ersten
+   Durchlaufs die Zeilen mit Nährwert-Begriffen suchen und alles einsammeln,
+   was auf derselben Höhe steht (= die Wertespalte). Ergebnis ist ein
+   Ausschnitt in Originalbild-Koordinaten, den wir vergrößert erneut lesen.
+   Nötig, weil das Etikett auf Fotos oft klein im Bild steht: nach dem
+   Herunterskalieren ist die Tabellenschrift dann zu fein für die OCR. */
+const TABELLEN_WORT=/kcal|kj|fett|kohlenh|eiwei|protein|zucker|salz|ballast|nährwert|nahrwert|gesätt|gesatt|brennwert/i;
+function zoomRect(words, canvasW, canvasH, natW, natH){
+  const hits=(words||[]).filter(w=>w.text && w.confidence>40 && TABELLEN_WORT.test(w.text) && w.bbox);
+  if(hits.length<3) return null;
+  let y0=1e9,y1=-1e9;
+  for(const w of hits){ y0=Math.min(y0,w.bbox.y0); y1=Math.max(y1,w.bbox.y1); }
+  const band=(y1-y0)*.06+6;
+  let x0=1e9,x1=-1e9;
+  for(const w of (words||[])){
+    if(!w.bbox) continue;
+    const cy=(w.bbox.y0+w.bbox.y1)/2;
+    if(cy>=y0-band && cy<=y1+band){ x0=Math.min(x0,w.bbox.x0); x1=Math.max(x1,w.bbox.x1); }
+  }
+  if(!(x1>x0)) return null;
+  const padX=(x1-x0)*.06+8, padY=(y1-y0)*.08+8;
+  x0=Math.max(0,x0-padX); x1=Math.min(canvasW,x1+padX);
+  y0=Math.max(0,y0-padY); y1=Math.min(canvasH,y1+padY);
+  // Lohnt sich nur, wenn der Ausschnitt deutlich kleiner als das Bild ist
+  const anteil=((x1-x0)*(y1-y0))/(canvasW*canvasH);
+  if(anteil>.55) return null;
+  const k=natW/canvasW;
+  return {x:Math.round(x0*k), y:Math.round(y0*k), w:Math.round((x1-x0)*k), h:Math.round((y1-y0)*k), anteil};
+}
+
 /* Zwei Erkennungs-Durchläufe zusammenführen: Basis gewinnt bei Konflikten,
    fehlende Werte kommen aus dem anderen Durchlauf dazu */
 function mergeParsed(base,other){
@@ -1378,7 +1419,8 @@ async function handleImageFile(file){
   $('#scanProgress').style.width='0%';
   openSheet('sheetScan');
   try{
-    const canvas = await preprocess(file);
+    const img = await loadImage(file);
+    const canvas = prepCanvas(img);
     const worker = await getWorker((label,p)=>{
       $('#scanStatus').textContent=label;
       $('#scanProgress').style.width=Math.round((p||0)*100)+'%';
@@ -1386,37 +1428,52 @@ async function handleImageFile(file){
     scanLabel='Lese Etikett …';
     $('#scanStatus').textContent=scanLabel;
     const dbg=[];
-    const {data:{text}} = await worker.recognize(canvas);
+    const {data} = await worker.recognize(canvas);
+    const text=data.text;
     dbg.push({pass:'Durchlauf 1 (Graustufen)',text});
     let parsed = parseNutrition(text);
-    // Fehlen Pflichtfelder? Rettungs-Durchläufe. Ballaststoffe zählen nicht:
-    // die sind auf EU-Etiketten freiwillig, sonst liefe das fast immer.
-    // Jeder Durchlauf füllt nur fehlende Werte auf — Durchlauf 1 (Graustufen)
-    // bleibt die Wahrheit, und ein Fehler darf frühere Ergebnisse nicht kosten.
+
+    /* Rettungs-Durchläufe, bis das Ergebnis vollständig UND in sich stimmig
+       ist. Reihenfolge nach Wirkung pro Sekunde: der Zoom auf die Tabelle
+       ist am wirksamsten (Etiketten stehen auf Fotos oft klein im Bild) und
+       billiger als eine Binarisierung des ganzen Bildes. Ballaststoffe
+       zählen nicht als fehlend — die sind auf EU-Etiketten freiwillig. */
     const missingCore = p => NUTRI_FIELDS.some(f=>f.key!=='fiber' && p.values[f.key]==null);
-    if(missingCore(parsed)){
-      scanLabel='Schwer zu lesen — zweiter Versuch …';
+    const fertig = p => !missingCore(p) && !Object.keys(checkPlausibility(p)).length;
+    const rect = zoomRect(data.words, canvas.width, canvas.height, img.naturalWidth, img.naturalHeight);
+    let zoomCanvas=null;
+    const zoomBild = ()=> zoomCanvas || (zoomCanvas = prepCanvas(img, rect, Math.min(1700, Math.round(rect.w*2.2))));
+
+    // Jeder Durchlauf liefert einen eigenen Parse; übernommen wird er nur,
+    // wenn er stimmiger/vollständiger ist (scoreParsed) — sonst füllt er
+    // bloß Lücken. So kann kein Rettungsversuch gute Werte verschlechtern.
+    const versuch = async (label, mkCanvas, name)=>{
+      if(fertig(parsed)) return;
+      scanLabel=label;
       $('#scanStatus').textContent=scanLabel;
       $('#scanProgress').style.width='0%';
       try{
-        const {data:{text:text2}} = await worker.recognize(adaptiveBinarize(canvas));
-        dbg.push({pass:'Durchlauf 2 (binarisiert)',text:text2});
-        parsed = mergeParsed(parsed, parseNutrition(text2));
-      }catch(err2){ console.warn('Zweiter Durchlauf fehlgeschlagen:', err2); dbg.push({pass:'Durchlauf 2',text:'FEHLER: '+err2}); }
-    }
-    if(missingCore(parsed)){
-      scanLabel='Helle Schrift? — noch ein Versuch …';
-      $('#scanStatus').textContent=scanLabel;
-      $('#scanProgress').style.width='0%';
-      try{
-        const {data:{text:text3}} = await worker.recognize(adaptiveBinarize(canvas,true));
-        dbg.push({pass:'Durchlauf 3 (helle Schrift)',text:text3});
-        parsed = mergeParsed(parsed, parseNutrition(text3));
-      }catch(err3){ console.warn('Dritter Durchlauf fehlgeschlagen:', err3); dbg.push({pass:'Durchlauf 3',text:'FEHLER: '+err3}); }
-    }
+        const {data:{text:t}} = await worker.recognize(mkCanvas());
+        dbg.push({pass:name,text:t});
+        const p2=parseNutrition(t);
+        const besser=scoreParsed(p2)>scoreParsed(parsed);
+        dbg.push({pass:name+' → Auswahl',text:`bisher ${scoreParsed(parsed)} Punkte, neu ${scoreParsed(p2)} Punkte → ${besser?'neu':'bisher'} gewinnt`});
+        parsed = besser ? mergeParsed(p2,parsed) : mergeParsed(parsed,p2);
+      }catch(e){ console.warn(name+' fehlgeschlagen:', e); dbg.push({pass:name,text:'FEHLER: '+e}); }
+    };
+
+    if(rect) await versuch('Tabelle heranzoomen …', ()=>zoomBild(),
+      `Zoom auf die Tabelle (${Math.round(rect.anteil*100)} % des Bildes)`);
+    if(rect) await versuch('Zoom, helle Schrift …', ()=>adaptiveBinarize(zoomBild(),true),
+      'Zoom, helle Schrift');
+    await versuch('Schwer zu lesen — zweiter Versuch …', ()=>adaptiveBinarize(canvas),
+      'Vollbild binarisiert');
+    await versuch('Helle Schrift? — noch ein Versuch …', ()=>adaptiveBinarize(canvas,true),
+      'Vollbild, helle Schrift');
+
     parsed.unsure = checkPlausibility(parsed);
     $('#ocrDebug').open=false;
-    $('#ocrDebugText').textContent = `Bild: ${canvas.width}×${canvas.height}px\n\n`+
+    $('#ocrDebugText').textContent = `Bild: ${img.naturalWidth}×${img.naturalHeight}px, Arbeitsgröße ${canvas.width}×${canvas.height}px\n\n`+
       dbg.map(d=>`── ${d.pass} ──\n${(d.text||'').trim()||'(nichts erkannt)'}`).join('\n\n');
     showScanResult(parsed);
   }catch(err){
@@ -1510,29 +1567,52 @@ function checkPlausibility(p){
   const v=p.values, u={};
   if(v.satfat!=null && v.fat!=null && v.satfat>v.fat+0.05){ u.satfat=true; u.fat=true; }
   if(v.sugar!=null && v.carbs!=null && v.sugar>v.carbs+0.05){ u.sugar=true; u.carbs=true; }
-  if(p.kj!=null && v.kcal!=null && found_direct(p)){
+
+  // kcal gegen die kJ-Angabe derselben Zeile prüfen. Stimmen sie überein,
+  // ist die kcal-Zahl doppelt belegt — dann sind bei Widersprüchen die
+  // Makros schuld, nicht sie.
+  let kcalGedeckt=false;
+  if(p.kj!=null && v.kcal!=null){
     const fromKj=p.kj/4.184;
-    if(Math.abs(fromKj-v.kcal)>Math.max(15,v.kcal*.2)) u.kcal=true;
+    if(Math.abs(fromKj-v.kcal)<=Math.max(15,v.kcal*.2)) kcalGedeckt=true;
+    else if(p.found.kcal===true) u.kcal=true;   // direkt gelesen und widerspricht kJ
   }
+
   if(v.kcal!=null && v.fat!=null && v.carbs!=null && v.protein!=null){
     const est=9*v.fat+4*v.carbs+4*v.protein+2*(v.fiber||0);
     // Atwater passt nie exakt (Rundung, Polyole, Alkohol) — grobe Ausreißer
     // entlarven aber verlesene Ziffern und verlorene Kommas
     if(est>20 && (v.kcal<est*.55 || v.kcal>est*1.5)){
-      u.kcal=true;
-      // Übeltäter suchen: welcher Makro-Wert repariert /10 die Bilanz?
-      // (verlorenes Komma: "3,5" als "35" gelesen)
+      // Erst nach einem einzelnen Übeltäter suchen: welcher Makro-Wert
+      // repariert /10 die Bilanz? (verlorenes Komma: "3,5" als "35" gelesen)
+      let culprit=null;
       for(const k of ['fat','carbs','protein']){
         if(!(v[k]>=10)) continue;
         const est2=est-(k==='fat'?9:4)*v[k]*0.9;
-        if(v.kcal>=est2*.55 && v.kcal<=est2*1.5){ u[k]=true; delete u.kcal; break; }
+        if(v.kcal>=est2*.55 && v.kcal<=est2*1.5){ culprit=k; break; }
+      }
+      if(culprit) u[culprit]=true;
+      else {
+        // Kein einzelner Ausreißer: alle Beteiligten markieren — außer kcal,
+        // wenn die kJ-Angabe sie deckt
+        u.fat=u.carbs=u.protein=true;
+        if(!kcalGedeckt) u.kcal=true;
       }
     }
   }
+  // „davon"-Werte stammen aus derselben Tabellenspalte wie ihr Oberwert —
+  // ist der verdächtig, ist es der Unterwert auch
+  if(u.fat && v.satfat!=null) u.satfat=true;
+  if(u.carbs && v.sugar!=null) u.sugar=true;
   return u;
 }
-// kcal wurde direkt gelesen (nicht bloß aus kJ berechnet)?
-const found_direct = p => p.found.kcal===true;
+/* Wie brauchbar ist ein Parse-Ergebnis? Viele Werte sind gut, Widersprüche
+   wiegen schwerer — so gewinnt ein stimmiges Ergebnis gegen ein volles, aber
+   in sich unmögliches. */
+function scoreParsed(p){
+  const n=NUTRI_FIELDS.filter(f=>p.values[f.key]!=null).length;
+  return n - 3*Object.keys(checkPlausibility(p)).length;
+}
 
 /* ── Scan-Ergebnis anzeigen ── */
 function showScanResult(parsed){
@@ -1613,7 +1693,7 @@ $('#dateline').textContent = new Date().toLocaleDateString('de-DE',{weekday:'lon
 renderToday(); renderHistory();
 
 /* Test-Hook (für automatisierte Prüfung) */
-window._bw = {handleImageFile, parseNutrition, preprocess, adaptiveBinarize, mergeParsed, checkPlausibility, get state(){return {entries,products,settings};}};
+window._bw = {handleImageFile, parseNutrition, preprocess, prepCanvas, loadImage, adaptiveBinarize, mergeParsed, checkPlausibility, scoreParsed, zoomRect, get state(){return {entries,products,settings};}};
 </script>
 </body>
 </html>
