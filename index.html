@@ -169,28 +169,6 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
 }
 .live-kcal small{display:block;font-family:var(--sans);font-weight:700;font-size:.62rem;text-transform:uppercase;letter-spacing:.12em;color:var(--green)}
 .sheet-btns{display:grid;gap:10px;margin-top:16px}
-
-/* ── Update-Banner ──────────────────── */
-.updatebar{
-  position:fixed;left:0;right:0;z-index:45;
-  bottom:calc(58px + env(safe-area-inset-bottom));
-  display:none;justify-content:center;pointer-events:none;padding:0 12px;
-}
-.updatebar.show{display:flex}
-.updatebar .inner{
-  pointer-events:auto;width:100%;max-width:456px;
-  display:flex;align-items:center;gap:10px;
-  background:var(--ink);color:var(--paper);border-radius:14px;
-  padding:10px 10px 10px 15px;font-size:.82rem;font-weight:700;
-  box-shadow:0 6px 20px rgba(23,21,15,.28);
-}
-.updatebar .inner span{flex:1}
-.updatebar button{
-  border:none;border-radius:9px;cursor:pointer;padding:8px 13px;
-  font-family:var(--sans);font-weight:700;font-size:.78rem;
-  background:var(--paper);color:var(--ink);
-}
-.updatebar button.ghost{background:none;color:var(--hair);padding:8px 4px}
 .save-toggle{
   width:100%;display:flex;align-items:center;gap:10px;margin-top:14px;cursor:pointer;
   border:2px solid var(--ink);border-radius:12px;background:var(--card);color:var(--muted);
@@ -460,14 +438,6 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
       <button class="btn btn-ghost btn-block" id="btnImport">Backup einspielen</button>
     </div>
     <input type="file" id="importInput" accept="application/json" class="hidden">
-  </div>
-</div>
-
-<div class="updatebar" id="updatebar">
-  <div class="inner">
-    <span>Neue Version verfügbar</span>
-    <button id="btnUpdate">Neu laden</button>
-    <button class="ghost" id="btnUpdateLater" aria-label="Später">✕</button>
   </div>
 </div>
 
@@ -1042,38 +1012,6 @@ $('#btnScanSave').addEventListener('click',()=>{
 /* ═══════════ Init ═══════════ */
 $('#dateline').textContent = new Date().toLocaleDateString('de-DE',{weekday:'long',day:'numeric',month:'long'});
 renderToday(); renderHistory();
-
-/* ═══════════ Service Worker ═══════════ */
-/* Läuft nur über http(s) — unter file:// gibt es keine Service Worker. */
-if('serviceWorker' in navigator && location.protocol.startsWith('http')){
-  window.addEventListener('load',()=>{
-    navigator.serviceWorker.register('sw.js').then(reg=>{
-      const offer = w => {
-        if(!w) return;
-        // nur melden, wenn schon eine Version läuft — beim allerersten
-        // Besuch ist "installed" der Normalfall, kein Update
-        if(w.state==='installed' && navigator.serviceWorker.controller) showUpdate(w);
-        else w.addEventListener('statechange',()=>{
-          if(w.state==='installed' && navigator.serviceWorker.controller) showUpdate(w);
-        });
-      };
-      offer(reg.waiting);
-      reg.addEventListener('updatefound',()=>offer(reg.installing));
-    }).catch(err=>console.warn('SW-Registrierung fehlgeschlagen:',err));
-
-    let reloading=false;
-    navigator.serviceWorker.addEventListener('controllerchange',()=>{
-      if(reloading) return;
-      reloading=true; location.reload();
-    });
-  });
-}
-function showUpdate(worker){
-  const bar=$('#updatebar');
-  bar.classList.add('show');
-  $('#btnUpdate').onclick = ()=>{ bar.classList.remove('show'); worker.postMessage('SKIP_WAITING'); };
-  $('#btnUpdateLater').onclick = ()=> bar.classList.remove('show');
-}
 
 /* Test-Hook (für automatisierte Prüfung) */
 window._bw = {handleImageFile, parseNutrition, get state(){return {entries,products,settings};}};
