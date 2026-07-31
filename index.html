@@ -360,7 +360,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
       <img id="scanPreview" class="scan-preview" alt="Etikett">
       <div class="scan-status" id="scanStatus">Lese Etikett …</div>
       <div class="progress"><i id="scanProgress"></i></div>
-      <div class="scan-tip">Tipp: Tabelle formatfüllend, gerade &amp; bei gutem Licht fotografieren.</div>
+      <div class="scan-tip">Tipp: Verpackung glatt streichen, Tabelle formatfüllend &amp; bei gutem Licht fotografieren.</div>
     </div>
     <div id="scanResult" class="hidden">
       <h3>Erkannte Nährwerte</h3>
@@ -1191,11 +1191,12 @@ $('#camInput').addEventListener('change',e=>{
   e.target.value='';
 });
 
+let scanLabel='Lese Etikett …';
 async function getWorker(onProgress){
   if(ocrWorker) return ocrWorker;
   ocrWorker = await Tesseract.createWorker('deu', 1, {
     logger:m=>{
-      if(m.status==='recognizing text') onProgress?.('Lese Etikett …', m.progress);
+      if(m.status==='recognizing text') onProgress?.(scanLabel, m.progress);
       else if(/loading|downloading/i.test(m.status)) onProgress?.('Lade Texterkennung (einmalig) …', m.progress||0);
     }
   });
@@ -1235,6 +1236,61 @@ async function preprocess(file){
   return c;
 }
 
+/* Lokale (adaptive) Binarisierung: Schwelle je Pixel aus dem Mittelwert der
+   Umgebung (Integralbild). Gleicht Schatten und Wölbungen aus, wie sie auf
+   zerknitterten Tüten entstehen — da versagt die globale Streckung oben. */
+function adaptiveBinarize(src){
+  const w=src.width, h=src.height;
+  const c=document.createElement('canvas'); c.width=w; c.height=h;
+  const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.drawImage(src,0,0);
+  const d=ctx.getImageData(0,0,w,h), px=d.data;
+  const gray=new Uint8ClampedArray(w*h);
+  for(let i=0,j=0;i<px.length;i+=4,j++) gray[j]=px[i];
+  const W=w+1, integ=new Float64Array(W*(h+1));
+  for(let y=0;y<h;y++){
+    let row=0;
+    for(let x=0;x<w;x++){
+      row+=gray[y*w+x];
+      integ[(y+1)*W+x+1]=integ[y*W+x+1]+row;
+    }
+  }
+  // Fenster ≈ 2–3 Zeichenhöhen; Pixel wird schwarz, wenn deutlich dunkler
+  // als seine Umgebung (Faktor .82 verhindert Rauschen auf glatten Flächen)
+  const half=Math.max(8,Math.round(w/32)), bias=.82;
+  let black=0;
+  for(let y=0;y<h;y++){
+    const y0=Math.max(0,y-half), y1=Math.min(h-1,y+half);
+    for(let x=0;x<w;x++){
+      const x0=Math.max(0,x-half), x1=Math.min(w-1,x+half);
+      const area=(y1-y0+1)*(x1-x0+1);
+      const sum=integ[(y1+1)*W+x1+1]-integ[y0*W+x1+1]-integ[(y1+1)*W+x0]+integ[y0*W+x0];
+      const v = gray[y*w+x]*area < sum*bias ? 0 : 255;
+      if(!v) black++;
+      const i=(y*w+x)*4;
+      px[i]=px[i+1]=px[i+2]=v;
+    }
+  }
+  // Helle Schrift auf dunklem Grund → invertieren, Tesseract will dunkle Schrift
+  if(black > w*h/2) for(let i=0;i<px.length;i+=4){ const v=255-px[i]; px[i]=px[i+1]=px[i+2]=v; }
+  ctx.putImageData(d,0,0);
+  return c;
+}
+
+/* Zwei Erkennungs-Durchläufe zusammenführen: Basis gewinnt bei Konflikten,
+   fehlende Werte kommen aus dem anderen Durchlauf dazu */
+function mergeParsed(base,other){
+  const m={values:{...base.values}, found:{...base.found},
+    basis: base.basis==='ml'||other.basis==='ml' ? 'ml' : 'g',
+    portion: base.portion ?? other.portion};
+  for(const f of NUTRI_FIELDS){
+    if(m.values[f.key]==null && other.values[f.key]!=null){
+      m.values[f.key]=other.values[f.key]; m.found[f.key]=other.found[f.key];
+    }
+  }
+  return m;
+}
+
 async function handleImageFile(file){
   $('#scanStage').classList.remove('hidden');
   $('#scanResult').classList.add('hidden');
@@ -1248,9 +1304,21 @@ async function handleImageFile(file){
       $('#scanStatus').textContent=label;
       $('#scanProgress').style.width=Math.round((p||0)*100)+'%';
     });
-    $('#scanStatus').textContent='Lese Etikett …';
+    scanLabel='Lese Etikett …';
+    $('#scanStatus').textContent=scanLabel;
     const {data:{text}} = await worker.recognize(canvas);
-    const parsed = parseNutrition(text);
+    let parsed = parseNutrition(text);
+    // Fehlen Werte (z. B. zerknitterte Tüte, Schatten)? Zweiter Versuch mit
+    // lokal binarisiertem Bild, Ergebnisse zusammenführen
+    if(NUTRI_FIELDS.some(f=>parsed.values[f.key]==null)){
+      scanLabel='Schwer zu lesen — zweiter Versuch …';
+      $('#scanStatus').textContent=scanLabel;
+      $('#scanProgress').style.width='0%';
+      const {data:{text:text2}} = await worker.recognize(adaptiveBinarize(canvas));
+      const parsed2 = parseNutrition(text2);
+      const better = Object.keys(parsed2.found).length > Object.keys(parsed.found).length;
+      parsed = better ? mergeParsed(parsed2,parsed) : mergeParsed(parsed,parsed2);
+    }
     showScanResult(parsed);
   }catch(err){
     console.error(err);
@@ -1277,7 +1345,9 @@ function parseNutrition(text){
   const values={}, found={};
   let basis = /100\s*ml/i.test(text) ? 'ml' : 'g';
 
-  for(const line of lines){
+  for(const rawLine of lines){
+    // OCR-Rauschen: doppeltes Dezimaltrennzeichen ("1,.2" / "1..2") → "1,2"
+    const line=rawLine.replace(/(\d)\s*[.,]\s*[.,]\s*(\d)/g,'$1,$2');
     const low=line.toLowerCase();
 
     // Energie: erste kcal-Angabe der Zeile (= 100g-Spalte)
@@ -1395,7 +1465,7 @@ $('#dateline').textContent = new Date().toLocaleDateString('de-DE',{weekday:'lon
 renderToday(); renderHistory();
 
 /* Test-Hook (für automatisierte Prüfung) */
-window._bw = {handleImageFile, parseNutrition, get state(){return {entries,products,settings};}};
+window._bw = {handleImageFile, parseNutrition, preprocess, adaptiveBinarize, mergeParsed, get state(){return {entries,products,settings};}};
 </script>
 </body>
 </html>
