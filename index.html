@@ -66,6 +66,12 @@ table.nutri td{padding:6px 0;border-bottom:1px solid var(--hair);font-variant-nu
 table.nutri tr:last-child td{border-bottom:none}
 table.nutri td:last-child{text-align:right;font-weight:600}
 table.nutri .sub td:first-child{padding-left:16px;color:var(--muted)}
+table.nutri.cols3 td:nth-child(2){text-align:right;font-weight:600;color:var(--muted)}
+table.nutri.cols3 tr.head td{
+  font-size:.6rem;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);
+  font-weight:700;padding:4px 0;border-bottom:1px solid var(--hair);
+}
+table.nutri.cols3 tr.head td:nth-child(2),table.nutri.cols3 tr.head td:last-child{text-align:right}
 
 /* ── Aktionen ───────────────────────── */
 .actions{display:grid;grid-template-columns:1fr auto;gap:10px;margin:16px 0}
@@ -207,6 +213,8 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
 /* ── Produkte ───────────────────────── */
 .prod{cursor:pointer}
 .prod:active{background:var(--paper)}
+.entry.tap{cursor:pointer}
+.entry.tap:active{background:var(--paper)}
 .per100-badge{
   font-size:.62rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
   border:1.5px solid var(--ink);border-radius:99px;padding:2px 8px;white-space:nowrap;
@@ -378,6 +386,24 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
   </div>
 </div>
 
+<div class="sheet" id="sheetEntry">
+  <div class="sheet-inner">
+    <div class="grabber"></div>
+    <h3 id="entName">Eintrag</h3>
+    <div class="sub" id="entInfo"></div>
+    <table class="nutri cols3" id="entTable"></table>
+    <div class="field hidden" id="entGramsWrap" style="margin:14px 0 0">
+      <label>Menge für die Umrechnung (<span id="entUnit">g</span>)</label>
+      <input type="number" id="entGrams" inputmode="decimal" placeholder="z. B. 120">
+    </div>
+    <div class="hint" id="entHint"></div>
+    <div class="sheet-btns">
+      <button class="btn btn-green btn-block" id="btnEntToProd">In Produkte speichern</button>
+      <button class="btn btn-ghost btn-block" id="btnEntDelete" style="box-shadow:none;border-color:var(--coral);color:var(--coral)">Eintrag löschen</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="sheetPortion">
   <div class="sheet-inner">
     <div class="grabber"></div>
@@ -508,12 +534,14 @@ function renderToday(){
     wrap.innerHTML = `<div class="empty"><span class="big">🥗</span>Noch nichts eingetragen.<br>Scanne dein erstes Etikett!</div>`;
   } else {
     wrap.innerHTML = `<div class="entry-list">`+ list.map(e=>`
-      <div class="entry">
+      <div class="entry tap" data-entry="${e.id}">
         <div class="e-name"><b>${esc(e.name)}</b><span>${e.grams?fmt(e.grams)+' '+(e.unit||'g'):'&nbsp;'}</span></div>
         <div class="e-kcal">${fmt(e.kcal)} <small>kcal</small></div>
         <button class="e-del" data-del="${e.id}" aria-label="Löschen">✕</button>
       </div>`).join('') + `</div>`;
-    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',()=>{
+    wrap.querySelectorAll('[data-entry]').forEach(el=>el.addEventListener('click',()=>openEntry(el.dataset.entry)));
+    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',ev=>{
+      ev.stopPropagation();
       entries = entries.filter(e=>e.id!==b.dataset.del);
       save(LS.entries,entries); renderToday(); renderHistory();
     }));
@@ -564,6 +592,72 @@ function renderProducts(){
   wrap.querySelectorAll('[data-prod]').forEach(el=>el.addEventListener('click',()=>openPortion(el.dataset.prod)));
 }
 $('#prodSearch').addEventListener('input', renderProducts);
+
+/* ═══════════ Eintrag-Detail ═══════════ */
+let entryDetail=null;
+function openEntry(id){
+  const e = entries.find(x=>x.id===id);
+  if(!e) return;
+  entryDetail=e;
+  const unit=e.unit||'g';
+  const g = e.grams>0 ? e.grams : null;
+  const k = g ? 100/g : null;
+
+  $('#entName').textContent = e.name;
+  $('#entInfo').textContent = g
+    ? `${fmt(g)} ${unit} · ${fmt(e.kcal)} kcal`
+    : `${fmt(e.kcal)} kcal · ohne Mengenangabe`;
+
+  const cell = (v,dec=1)=> g ? fmt(v*k,dec) : '–';
+  const row = (label,key,sub)=>`<tr class="${sub?'sub':''}">
+      <td>${label}</td><td>${fmt1(e[key]||0)} g</td><td>${cell(e[key]||0)} g</td></tr>`;
+  $('#entTable').innerHTML = `
+    <tr class="head"><td></td><td>${g?fmt(g)+' '+unit:'Portion'}</td><td>100 ${unit}</td></tr>
+    <tr><td>Energie</td><td>${fmt(e.kcal)} kcal</td><td>${cell(e.kcal||0,0)} kcal</td></tr>
+    ${row('Fett','fat')}
+    ${row('davon gesättigt','satfat',true)}
+    ${row('Kohlenhydrate','carbs')}
+    ${row('davon Zucker','sugar',true)}
+    ${row('Ballaststoffe','fiber')}
+    ${row('Eiweiß','protein')}
+    ${row('Salz','salt')}`;
+
+  $('#entUnit').textContent = unit;
+  $('#entGrams').value='';
+  $('#entGramsWrap').classList.toggle('hidden', !!g);
+
+  const dupe = products.some(p=>p.name.toLowerCase()===e.name.toLowerCase() && p.basis===unit);
+  $('#entHint').innerHTML = dupe
+    ? `„${esc(e.name)}" liegt schon in deinen Produkten.`
+    : g ? 'Wird mit den Werten pro 100 '+unit+' gespeichert.'
+        : `<b>Menge fehlt</b> — ohne sie lässt sich nicht auf 100 ${unit} umrechnen.`;
+
+  openSheet('sheetEntry');
+}
+$('#btnEntToProd').addEventListener('click',()=>{
+  const e=entryDetail; if(!e) return;
+  const unit=e.unit||'g';
+  const g = e.grams>0 ? e.grams : (parseFloat($('#entGrams').value)||0);
+  if(!(g>0)){ toast('Menge fehlt fürs Produkt'); $('#entGrams').focus(); return; }
+  if(!(e.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
+  if(products.some(p=>p.name.toLowerCase()===e.name.toLowerCase() && p.basis===unit)){
+    toast(`„${e.name}" ist schon in Produkten`); return;
+  }
+  const k=100/g;
+  products.push({id:uid(), name:e.name, basis:unit, per100:{
+    kcal:Math.round((e.kcal||0)*k), fat:(e.fat||0)*k, satfat:(e.satfat||0)*k,
+    carbs:(e.carbs||0)*k, sugar:(e.sugar||0)*k, fiber:(e.fiber||0)*k,
+    protein:(e.protein||0)*k, salt:(e.salt||0)*k,
+  }});
+  save(LS.products,products); renderProducts(); closeSheet();
+  toast(`${e.name} in Produkte gespeichert ✓`);
+});
+$('#btnEntDelete').addEventListener('click',()=>{
+  if(!entryDetail) return;
+  entries = entries.filter(x=>x.id!==entryDetail.id);
+  save(LS.entries,entries); renderToday(); renderHistory(); closeSheet();
+  toast('Eintrag gelöscht');
+});
 
 /* ═══════════ Portion-Sheet ═══════════ */
 let portionProduct=null;
