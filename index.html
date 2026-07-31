@@ -1299,7 +1299,9 @@ function adaptiveBinarize(src){
   const d=ctx.getImageData(0,0,w,h), px=d.data;
   const gray=new Uint8ClampedArray(w*h);
   for(let i=0,j=0;i<px.length;i+=4,j++) gray[j]=px[i];
-  const W=w+1, integ=new Float64Array(W*(h+1));
+  // Uint32 reicht (max. Summe 255·Pixelzahl) und halbiert den Speicher —
+  // auf älteren Handys ist das der Unterschied zwischen läuft und stirbt
+  const W=w+1, integ=new Uint32Array(W*(h+1));
   for(let y=0;y<h;y++){
     let row=0;
     for(let x=0;x<w;x++){
@@ -1360,16 +1362,19 @@ async function handleImageFile(file){
     $('#scanStatus').textContent=scanLabel;
     const {data:{text}} = await worker.recognize(canvas);
     let parsed = parseNutrition(text);
-    // Fehlen Werte (z. B. zerknitterte Tüte, Schatten)? Zweiter Versuch mit
-    // lokal binarisiertem Bild, Ergebnisse zusammenführen
-    if(NUTRI_FIELDS.some(f=>parsed.values[f.key]==null)){
+    // Fehlen Pflichtfelder (z. B. zerknitterte Tüte, Schatten)? Zweiter Versuch
+    // mit lokal binarisiertem Bild. Ballaststoffe zählen nicht: die sind auf
+    // EU-Etiketten freiwillig, sonst liefe der zweite Durchlauf fast immer.
+    if(NUTRI_FIELDS.some(f=>f.key!=='fiber' && parsed.values[f.key]==null)){
       scanLabel='Schwer zu lesen — zweiter Versuch …';
       $('#scanStatus').textContent=scanLabel;
       $('#scanProgress').style.width='0%';
-      const {data:{text:text2}} = await worker.recognize(adaptiveBinarize(canvas));
-      const parsed2 = parseNutrition(text2);
-      const better = Object.keys(parsed2.found).length > Object.keys(parsed.found).length;
-      parsed = better ? mergeParsed(parsed2,parsed) : mergeParsed(parsed,parsed2);
+      // Nur fehlende Werte auffüllen — Durchlauf 1 (Graustufen) bleibt die
+      // Wahrheit, und ein Fehler hier darf seine Ergebnisse nicht wegwerfen
+      try{
+        const {data:{text:text2}} = await worker.recognize(adaptiveBinarize(canvas));
+        parsed = mergeParsed(parsed, parseNutrition(text2));
+      }catch(err2){ console.warn('Zweiter Durchlauf fehlgeschlagen:', err2); }
     }
     showScanResult(parsed);
   }catch(err){
