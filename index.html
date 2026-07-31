@@ -12,6 +12,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400..900;1,9..144,400..900&display=swap" rel="stylesheet">
 <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5.1.1/dist/tesseract.min.js" defer></script>
+<script src="foods.js"></script>
 <style>
 :root{
   --paper:#F6F1E7;
@@ -74,7 +75,8 @@ table.nutri.cols3 tr.head td{
 table.nutri.cols3 tr.head td:nth-child(2),table.nutri.cols3 tr.head td:last-child{text-align:right}
 
 /* ── Aktionen ───────────────────────── */
-.actions{display:grid;grid-template-columns:1fr auto;gap:10px;margin:16px 0}
+.actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}
+.actions .btn-scan{grid-column:1 / -1}
 .btn{
   border:2px solid var(--ink);border-radius:16px;padding:15px 18px;cursor:pointer;
   font-family:var(--sans);font-weight:700;font-size:1rem;display:flex;align-items:center;justify-content:center;gap:9px;
@@ -210,6 +212,19 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
 .day-row b{font-variant-numeric:tabular-nums;font-family:var(--serif)}
 .day-row .d{color:var(--muted);font-size:.8rem}
 
+/* ── Suche ──────────────────────────── */
+.res-scroll{max-height:46dvh;overflow-y:auto;margin:2px -4px 0;padding:0 4px}
+.res-cat{
+  font-size:.6rem;font-weight:700;letter-spacing:.1em;text-transform:uppercase;
+  color:var(--muted);border:1.5px solid var(--hair);border-radius:99px;
+  padding:2px 7px;white-space:nowrap;
+}
+.src-badge{
+  font-size:.55rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;
+  background:var(--ink);color:var(--paper);border-radius:99px;padding:2px 7px;white-space:nowrap;
+}
+.searching{text-align:center;color:var(--muted);font-size:.82rem;padding:16px 0}
+
 /* ── Produkte ───────────────────────── */
 .prod{cursor:pointer}
 .prod:active{background:var(--paper)}
@@ -263,6 +278,10 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
       <button class="btn btn-scan" id="btnScan">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         Etikett scannen
+      </button>
+      <button class="btn btn-ghost" id="btnFind">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+        Suchen
       </button>
       <button class="btn btn-ghost" id="btnManual">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
@@ -386,6 +405,22 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
   </div>
 </div>
 
+<div class="sheet" id="sheetSearch">
+  <div class="sheet-inner">
+    <div class="grabber"></div>
+    <h3>Lebensmittel suchen</h3>
+    <div class="sub"><span id="dbCount">0</span> eingebaute Einträge — sofort, ohne Netz.</div>
+    <div class="field" style="margin-bottom:8px">
+      <input type="search" id="foodSearch" placeholder="z. B. Haferflocken, Gouda, Banane …" autocomplete="off">
+    </div>
+    <div class="res-scroll" id="foodResults"></div>
+    <div class="sheet-btns">
+      <button class="btn btn-ghost btn-block" id="btnOnlineSearch">Zusätzlich online suchen</button>
+    </div>
+    <div class="hint" id="offHint">Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.</div>
+  </div>
+</div>
+
 <div class="sheet" id="sheetEntry">
   <div class="sheet-inner">
     <div class="grabber"></div>
@@ -420,6 +455,10 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
       <button class="btn btn-green btn-block" id="btnPortAdd">Für heute eintragen</button>
       <button class="btn btn-ghost btn-block" id="btnPortDelete" style="box-shadow:none;border-color:var(--coral);color:var(--coral)">Produkt löschen</button>
     </div>
+    <button class="save-toggle" id="portSaveProd" aria-pressed="false">
+      <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+      In Produkte speichern
+    </button>
   </div>
 </div>
 
@@ -449,6 +488,8 @@ const LS = {
   entries:'brennwert.entries',
   products:'brennwert.products',
   settings:'brennwert.settings',
+  offCache:'brennwert.offcache',
+  offLast:'brennwert.offlast',
 };
 const load = (k,f)=>{ try{ return JSON.parse(localStorage.getItem(k)) ?? f; }catch{ return f; } };
 const save = (k,v)=> localStorage.setItem(k, JSON.stringify(v));
@@ -593,6 +634,156 @@ function renderProducts(){
 }
 $('#prodSearch').addEventListener('input', renderProducts);
 
+/* ═══════════ Lebensmittel-Suche ═══════════ */
+
+/* Umlaute und Akzente wegnormalisieren, damit "kase" auch "Käse" findet */
+const COMBINING = new RegExp('[\\u0300-\\u036f]','g');
+const norm = s => (s||'')
+  .toLowerCase().replace(/ß/g,'ss')
+  .normalize('NFD').replace(COMBINING,'')
+  .replace(/[^a-z0-9]+/g,' ').trim();
+
+/* Die kompakten Arrays aus foods.js einmalig zu Objekten ausrollen */
+const FOODS = [];
+for(const [cat, items] of Object.entries(window.FOOD_DB||{})){
+  for(const a of items){
+    FOODS.push({name:a[0], cat, basis:a[6]||'g', key:norm(a[0]),
+      per100:{kcal:a[1], fat:a[2], satfat:0, carbs:a[3], sugar:a[4], fiber:0, protein:a[5], salt:0}});
+  }
+}
+
+function scoreFood(key, q, tokens){
+  if(key === q) return 120;
+  if(key.startsWith(q)) return 100;
+  if(key.split(' ').some(w=>w.startsWith(q))) return 70;
+  if(key.includes(q)) return 40;
+  if(tokens.length>1 && tokens.every(t=>key.includes(t))) return 20;
+  return 0;
+}
+function searchFoods(query, limit=40){
+  const q=norm(query);
+  if(q.length<2) return [];
+  const tokens=q.split(' ').filter(Boolean);
+  return FOODS
+    .map(f=>({f, s:scoreFood(f.key,q,tokens)}))
+    .filter(r=>r.s>0)
+    .sort((a,b)=> b.s-a.s || a.f.name.length-b.f.name.length || a.f.name.localeCompare(b.f.name,'de'))
+    .slice(0,limit).map(r=>r.f);
+}
+
+let onlineHits=[];        // Treffer der letzten Online-Suche
+function renderFoodResults(){
+  const q=$('#foodSearch').value;
+  const local=searchFoods(q);
+  const wrap=$('#foodResults');
+  if(!q.trim()){
+    wrap.innerHTML=`<div class="empty" style="padding:22px 18px">Tippe los — z. B. „Quark", „Reis" oder „Salami".</div>`;
+    return;
+  }
+  const row=(f,i,online)=>`
+    <div class="entry tap" data-hit="${online?'o':'l'}${i}">
+      <div class="e-name"><b>${esc(f.name)}</b><span>F ${fmt1(f.per100.fat)} · KH ${fmt1(f.per100.carbs)} · E ${fmt1(f.per100.protein)}</span></div>
+      ${online?'<span class="src-badge">online</span>':`<span class="res-cat">${esc(f.cat)}</span>`}
+      <span class="per100-badge">${fmt(f.per100.kcal)} kcal/100${f.basis}</span>
+    </div>`;
+  const parts=[];
+  if(local.length)      parts.push(local.map((f,i)=>row(f,i,false)).join(''));
+  if(onlineHits.length) parts.push(onlineHits.map((f,i)=>row(f,i,true)).join(''));
+  wrap.innerHTML = parts.length
+    ? `<div class="entry-list">${parts.join('')}</div>`
+    : `<div class="empty" style="padding:22px 18px">Nichts gefunden.<br>Versuch die Online-Suche oder trag es manuell ein.</div>`;
+  wrap.querySelectorAll('[data-hit]').forEach(el=>el.addEventListener('click',()=>{
+    const v=el.dataset.hit, i=+v.slice(1);
+    const f = v[0]==='o' ? onlineHits[i] : local[i];
+    if(f) openPortion({name:f.name, basis:f.basis, per100:f.per100});
+  }));
+}
+
+$('#btnFind').addEventListener('click',()=>{
+  $('#foodSearch').value=''; onlineHits=[];
+  $('#dbCount').textContent=fmt(FOODS.length);
+  $('#offHint').textContent='Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.';
+  renderFoodResults();
+  openSheet('sheetSearch');
+  setTimeout(()=>$('#foodSearch').focus(),350);
+});
+$('#foodSearch').addEventListener('input',()=>{ onlineHits=[]; renderFoodResults(); });
+
+/* ── Open Food Facts ──────────────────────────────────
+   Bewusst nur auf Knopfdruck: die API erlaubt 10 Suchen pro Minute
+   und IP. Suche-beim-Tippen würde uns sofort aussperren. Antworten
+   landen im localStorage, damit dieselbe Anfrage nichts mehr kostet.
+   Daten: Open Food Facts, ODbL. */
+const OFF_GAP = 6500;
+/* im Storage, nicht nur im Speicher — sonst umgeht ein Reload die Bremse */
+const offLast  = ()=> load(LS.offLast, 0);
+const offStamp = ()=> save(LS.offLast, Date.now());
+let offCache = load(LS.offCache, {});
+
+function offMap(p){
+  const n = p.nutriments || {};
+  let kcal = n['energy-kcal_100g'];
+  if(kcal==null && n['energy_100g']!=null) kcal = n['energy_100g']/4.184;   // kJ → kcal
+  if(!(kcal>0)) return null;
+  const name = (p.product_name_de || p.product_name || '').trim();
+  if(!name) return null;
+  const brand = (p.brands||'').split(',')[0].trim();
+  const num = v => (typeof v==='number' && isFinite(v)) ? v : 0;
+  return {
+    name: brand && !norm(name).includes(norm(brand)) ? `${name} (${brand})` : name,
+    basis: 'g', cat: 'Online',
+    per100:{
+      kcal:Math.round(kcal), fat:num(n.fat_100g), satfat:num(n['saturated-fat_100g']),
+      carbs:num(n.carbohydrates_100g), sugar:num(n.sugars_100g), fiber:num(n.fiber_100g),
+      protein:num(n.proteins_100g), salt:num(n.salt_100g),
+    }
+  };
+}
+
+async function searchOnline(){
+  const q=$('#foodSearch').value.trim();
+  if(q.length<2){ toast('Erst einen Suchbegriff eintippen'); $('#foodSearch').focus(); return; }
+
+  const key=norm(q);
+  if(offCache[key]){
+    onlineHits=offCache[key];
+    $('#offHint').textContent=`${onlineHits.length} Treffer aus dem Zwischenspeicher · Daten von Open Food Facts (ODbL)`;
+    renderFoodResults(); return;
+  }
+  const wait = OFF_GAP - (Date.now()-offLast());
+  if(wait>0){ toast(`Noch ${Math.ceil(wait/1000)} s — die API erlaubt 10 Suchen/Minute`); return; }
+
+  const btn=$('#btnOnlineSearch');
+  btn.disabled=true; btn.textContent='Suche …';
+  $('#offHint').textContent='Frage Open Food Facts …';
+  offStamp();
+  try{
+    const url='https://de.openfoodfacts.org/cgi/search.pl'
+      +`?search_terms=${encodeURIComponent(q)}&search_simple=1&action=process&json=1&page_size=30`
+      +'&fields=product_name,product_name_de,brands,nutriments';
+    const res=await fetch(url);
+    if(!res.ok) throw new Error('HTTP '+res.status);
+    const data=await res.json();
+    onlineHits=(data.products||[]).map(offMap).filter(Boolean).slice(0,25);
+
+    offCache[key]=onlineHits;
+    const keys=Object.keys(offCache);
+    if(keys.length>60) keys.slice(0,keys.length-60).forEach(k=>delete offCache[k]);
+    save(LS.offCache, offCache);
+
+    $('#offHint').textContent = onlineHits.length
+      ? `${onlineHits.length} Online-Treffer · Daten von Open Food Facts (ODbL)`
+      : 'Online nichts Brauchbares gefunden — viele Einträge dort haben keine Nährwerte.';
+  }catch(err){
+    console.warn('Open Food Facts:',err);
+    $('#offHint').innerHTML='<b>Online-Suche fehlgeschlagen.</b> Kein Netz oder die API ist gerade dicht.';
+  }finally{
+    btn.disabled=false; btn.textContent='Zusätzlich online suchen';
+    renderFoodResults();
+  }
+}
+$('#btnOnlineSearch').addEventListener('click', searchOnline);
+
 /* ═══════════ Eintrag-Detail ═══════════ */
 let entryDetail=null;
 function openEntry(id){
@@ -661,9 +852,16 @@ $('#btnEntDelete').addEventListener('click',()=>{
 
 /* ═══════════ Portion-Sheet ═══════════ */
 let portionProduct=null;
-function openPortion(id){
-  portionProduct = products.find(p=>p.id===id);
+/* Nimmt eine Produkt-ID aus der Bibliothek oder ein fertiges Produkt-Objekt
+   (Treffer aus der Datenbank / von Open Food Facts). Bei Bibliotheks-
+   Produkten gibt es „löschen", sonst den Speichern-Toggle. */
+function openPortion(idOrProduct){
+  const fromLibrary = typeof idOrProduct === 'string';
+  portionProduct = fromLibrary ? products.find(p=>p.id===idOrProduct) : idOrProduct;
   if(!portionProduct) return;
+  $('#btnPortDelete').classList.toggle('hidden', !fromLibrary);
+  $('#portSaveProd').classList.toggle('hidden', fromLibrary);
+  setToggle('portSaveProd', false);
   $('#portName').textContent = portionProduct.name;
   $('#portInfo').textContent = `${fmt(portionProduct.per100.kcal)} kcal pro 100 ${portionProduct.basis}`;
   $('#portUnit2').textContent = portionProduct.basis;
@@ -679,7 +877,14 @@ $('#portGrams').addEventListener('input',()=>{
 $('#btnPortAdd').addEventListener('click',()=>{
   const g=parseFloat($('#portGrams').value);
   if(!(g>0)) { toast('Portionsgröße fehlt'); return; }
-  addEntryFromProduct(portionProduct, g);
+  const p=portionProduct;
+  const keep = !$('#portSaveProd').classList.contains('hidden') && toggleOn('portSaveProd');
+  if(keep && !products.some(x=>x.name.toLowerCase()===p.name.toLowerCase() && x.basis===p.basis)){
+    products.push({id:uid(), name:p.name, basis:p.basis, per100:{...p.per100}});
+    save(LS.products,products); renderProducts();
+  }
+  addEntryFromProduct(p, g);
+  if(keep) toast(`${p.name} eingetragen + gespeichert ✓`);
   closeSheet();
 });
 $('#btnPortDelete').addEventListener('click',()=>{
@@ -715,6 +920,7 @@ function initSaveToggle(id,onChange){
   });
 }
 initSaveToggle('pSaveProd');
+initSaveToggle('portSaveProd');
 initSaveToggle('mSaveProd', on=>{
   $('#mSaveHint').textContent = on
     ? 'Die Menge (g) wird gebraucht — daraus entstehen die Werte pro 100 g.'
