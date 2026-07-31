@@ -163,6 +163,19 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
 }
 .live-kcal small{display:block;font-family:var(--sans);font-weight:700;font-size:.62rem;text-transform:uppercase;letter-spacing:.12em;color:var(--green)}
 .sheet-btns{display:grid;gap:10px;margin-top:16px}
+.save-toggle{
+  width:100%;display:flex;align-items:center;gap:10px;margin-top:14px;cursor:pointer;
+  border:2px solid var(--ink);border-radius:12px;background:var(--card);color:var(--muted);
+  padding:11px 13px;font-family:var(--sans);font-weight:700;font-size:.85rem;text-align:left;
+}
+.save-toggle .box{
+  width:20px;height:20px;flex:none;border:2px solid var(--ink);border-radius:6px;
+  background:var(--paper);display:grid;place-items:center;
+}
+.save-toggle .box svg{opacity:0;color:var(--paper)}
+.save-toggle.on{background:var(--green-soft);color:var(--ink)}
+.save-toggle.on .box{background:var(--green);border-color:var(--green)}
+.save-toggle.on .box svg{opacity:1}
 
 /* ── Scan-Zustand ───────────────────── */
 .scan-stage{text-align:center;padding:6px 0 4px}
@@ -325,6 +338,10 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
         </div>
         <div class="live-kcal"><small>macht</small><span id="liveKcal">–</span></div>
       </div>
+      <button class="save-toggle" id="pSaveProd" aria-pressed="false">
+        <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+        In Produkte speichern
+      </button>
       <div class="sheet-btns">
         <button class="btn btn-green btn-block" id="btnScanAdd">Für heute eintragen</button>
         <button class="btn btn-ghost btn-block" id="btnScanSave">Nur Produkt speichern</button>
@@ -350,6 +367,11 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
       <div class="field"><label>Zucker (g, optional)</label><input type="number" id="mSugar" inputmode="decimal"></div>
       <div class="field"><label>Eiweiß (g, optional)</label><input type="number" id="mProtein" inputmode="decimal"></div>
     </div>
+    <button class="save-toggle" id="mSaveProd" aria-pressed="false">
+      <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+      In Produkte speichern
+    </button>
+    <div class="hint" id="mSaveHint" style="margin:6px 0 0"></div>
     <div class="sheet-btns">
       <button class="btn btn-green btn-block" id="btnManualAdd">Eintragen</button>
     </div>
@@ -531,7 +553,7 @@ function renderProducts(){
   const list = products.filter(p=>p.name.toLowerCase().includes(q));
   const wrap=$('#productList');
   if(!list.length){
-    wrap.innerHTML = `<div class="empty"><span class="big">📦</span>${products.length? 'Nichts gefunden.' : 'Gescannte Produkte landen hier —<br>einmal scannen, immer wieder eintragen.'}</div>`;
+    wrap.innerHTML = `<div class="empty"><span class="big">📦</span>${products.length? 'Nichts gefunden.' : 'Noch nichts gespeichert.<br>Beim Scannen oder manuellen Eintragen<br>„In Produkte speichern" antippen.'}</div>`;
     return;
   }
   wrap.innerHTML = `<div class="entry-list">` + list.map(p=>`
@@ -584,26 +606,64 @@ function addEntryFromProduct(p, grams){
   toast(`${p.name} eingetragen ✓`);
 }
 
+/* ═══════════ Toggle „In Produkte speichern" ═══════════ */
+const toggleOn = id => $('#'+id).classList.contains('on');
+function setToggle(id,on){
+  const el=$('#'+id);
+  el.classList.toggle('on',!!on);
+  el.setAttribute('aria-pressed', on?'true':'false');
+}
+function initSaveToggle(id,onChange){
+  $('#'+id).addEventListener('click',()=>{
+    const on=!toggleOn(id);
+    setToggle(id,on);
+    onChange?.(on);
+  });
+}
+initSaveToggle('pSaveProd');
+initSaveToggle('mSaveProd', on=>{
+  $('#mSaveHint').textContent = on
+    ? 'Die Menge (g) wird gebraucht — daraus entstehen die Werte pro 100 g.'
+    : '';
+});
+
 /* ═══════════ Manuell ═══════════ */
 $('#btnManual').addEventListener('click',()=>{
   ['mName','mKcal','mGrams','mFat','mCarbs','mSugar','mProtein'].forEach(id=>$('#'+id).value='');
+  setToggle('mSaveProd',false); $('#mSaveHint').textContent='';
   openSheet('sheetManual');
   setTimeout(()=>$('#mName').focus(),350);
 });
 $('#btnManualAdd').addEventListener('click',()=>{
   const name=$('#mName').value.trim();
   const kcal=parseFloat($('#mKcal').value);
+  const num=id=>parseFloat($('#'+id).value)||0;
   if(!name){ toast('Name fehlt'); return; }
   if(!(kcal>=0)){ toast('Kalorien fehlen'); return; }
+  const grams=parseFloat($('#mGrams').value)||null;
+  const asProduct=toggleOn('mSaveProd');
+  if(asProduct && !(grams>0)){ toast('Menge (g) fehlt fürs Produkt'); $('#mGrams').focus(); return; }
+
   entries.push({
-    id:uid(), date:todayStr(), name, grams:parseFloat($('#mGrams').value)||null, unit:'g',
-    kcal:Math.round(kcal), fat:parseFloat($('#mFat').value)||0, satfat:0,
-    carbs:parseFloat($('#mCarbs').value)||0, sugar:parseFloat($('#mSugar').value)||0,
-    fiber:0, protein:parseFloat($('#mProtein').value)||0, salt:0,
+    id:uid(), date:todayStr(), name, grams, unit:'g',
+    kcal:Math.round(kcal), fat:num('mFat'), satfat:0,
+    carbs:num('mCarbs'), sugar:num('mSugar'),
+    fiber:0, protein:num('mProtein'), salt:0,
   });
   save(LS.entries,entries);
+
+  if(asProduct){
+    const k=100/grams;   // Portionswerte auf 100 g hochrechnen
+    products.push({id:uid(), name, basis:'g', per100:{
+      kcal:Math.round(kcal*k), fat:num('mFat')*k, satfat:0,
+      carbs:num('mCarbs')*k, sugar:num('mSugar')*k, fiber:0,
+      protein:num('mProtein')*k, salt:0,
+    }});
+    save(LS.products,products); renderProducts();
+  }
+
   renderToday(); renderHistory(); closeSheet();
-  toast(`${name} eingetragen ✓`);
+  toast(asProduct ? `${name} eingetragen + gespeichert ✓` : `${name} eingetragen ✓`);
 });
 
 /* ═══════════ Einstellungen ═══════════ */
@@ -789,6 +849,7 @@ function showScanResult(parsed){
   $('#scanStage').classList.add('hidden');
   $('#scanResult').classList.remove('hidden');
   $('#pName').value='';
+  setToggle('pSaveProd',false);
   setBasis(parsed.basis||'g');
 
   const grid=$('#nutriInputs');
@@ -841,8 +902,10 @@ $('#btnScanAdd').addEventListener('click',()=>{
   if(!(g>0)){ toast('Portionsgröße fehlt'); $('#pPortion').focus(); return; }
   const p=buildProduct();
   if(!(p.per100.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
-  products.push(p); save(LS.products,products);
+  const keep=toggleOn('pSaveProd');
+  if(keep){ products.push(p); save(LS.products,products); renderProducts(); }
   addEntryFromProduct(p,g);
+  if(keep) toast(`${p.name} eingetragen + gespeichert ✓`);
   closeSheet();
 });
 $('#btnScanSave').addEventListener('click',()=>{
