@@ -1436,10 +1436,6 @@ function toNum(s){
   const n=parseFloat(s);
   return isFinite(n)?n:null;
 }
-function firstNum(str){
-  const m=str.match(/(\d[\d.,]*)/);
-  return m?toNum(m[1]):null;
-}
 function parseNutrition(text){
   const lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l.length>1);
   const values={}, found={};
@@ -1456,19 +1452,32 @@ function parseNutrition(text){
       const m=low.match(/(\d[\d.,]*)\s*kcal/);
       if(m){ const v=toNum(m[1]); if(v!=null && v>5 && v<1200){ values.kcal=Math.round(v); found.kcal=true; } }
     }
-    if(kj==null && /energie|brennwert/.test(low) && /kj/.test(low)){
+    // kJ auch ohne "Energie" auf der Zeile akzeptieren — die OCR verstümmelt
+    // das Wort gern ("z 441 kJ"). Die Einheit kJ ist Signal genug.
+    if(kj==null && /kj/.test(low)){
       const m=low.match(/(\d[\d.,]*)\s*kj/);
-      if(m){ const v=toNum(m[1]); if(v!=null && v>50) kj=v; }
+      if(m){ const v=toNum(m[1]); if(v!=null && v>50 && v<4000) kj=v; }
     }
 
     const grab=()=>{ // erste Zahl nach dem Schlüsselwort — bevorzugt mit "g"-Einheit
       const l2=line.replace(/\b(pro\s*)?100\s*(g|ml)\b/ig,' ');
+      let raw=null;
       let m=l2.match(/(\d+(?:[.,]\d+)?)\s*g(?![a-z])/i);
-      if(m) return toNum(m[1]);
-      m=l2.match(/[a-zäöüß)][\s:]*([\d][\d.,]*)/i);
-      let v=m?toNum(m[1]):firstNum(l2);
-      // OCR liest "57,5 g" oft als "57,59" (g→9 an die Zahl geklebt): letzte 9 abschneiden
-      if(v!=null && m && /[.,]\d+9$/.test(m[1].trim())) v=toNum(m[1].trim().slice(0,-1));
+      if(m) raw=m[1];
+      else{
+        m=l2.match(/[a-zäöüß)][\s:]*([\d][\d.,]*)/i);
+        raw=m ? m[1] : (l2.match(/(\d[\d.,]*)/)||[])[1];
+      }
+      if(raw==null) return null;
+      raw=raw.trim();
+      let v=toNum(raw);
+      // OCR klebt das Einheiten-"g" oft als "9" an die Zahl: "21 g"→"219",
+      // "1,8 g"→"1,89". Endet die Zahl auf 9 und wird sie ohne die 9 erst
+      // plausibel (≤100) oder endet sie auf Dezimalstelle+9, dann abschneiden.
+      if(v!=null && /9$/.test(raw)){
+        const t=toNum(raw.slice(0,-1));
+        if(t!=null && ((v>100 && t<=100) || /[.,]\d+9$/.test(raw))) v=t;
+      }
       return v;
     };
 
