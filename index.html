@@ -212,6 +212,13 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .progress{height:10px;border:2px solid var(--ink);border-radius:99px;overflow:hidden;background:var(--card)}
 .progress i{display:block;height:100%;width:0%;background:var(--coral);transition:width .3s}
 .scan-tip{font-size:.75rem;color:var(--muted);margin-top:12px}
+.ocr-debug{margin-top:14px;font-size:.72rem;color:var(--muted)}
+.ocr-debug summary{cursor:pointer;font-weight:700}
+.ocr-debug pre{
+  white-space:pre-wrap;word-break:break-word;margin-top:8px;padding:10px;
+  background:var(--card);border:1.5px solid var(--hair);border-radius:10px;
+  max-height:40dvh;overflow-y:auto;font-size:.7rem;line-height:1.45;
+}
 
 /* ── Verlauf ────────────────────────── */
 .chart-card{background:var(--card);border:2px solid var(--ink);border-radius:var(--radius);padding:18px;box-shadow:5px 6px 0 rgba(23,21,15,.12)}
@@ -395,6 +402,10 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
         <button class="btn btn-green btn-block" id="btnScanAdd">Für heute eintragen</button>
         <button class="btn btn-ghost btn-block" id="btnScanSave">Nur Produkt speichern</button>
       </div>
+      <details class="ocr-debug" id="ocrDebug">
+        <summary>Erkannter Text (zur Fehlersuche)</summary>
+        <pre id="ocrDebugText"></pre>
+      </details>
     </div>
   </div>
 </div>
@@ -1256,12 +1267,21 @@ async function getWorker(onProgress){
 }
 
 async function preprocess(file){
-  const img = await createImageBitmap(file);
-  const targetW = Math.min(1700, Math.max(1200, img.width));
-  const scale = targetW/img.width;
-  const w=Math.round(img.width*scale), h=Math.round(img.height*scale);
+  // <img> statt createImageBitmap: wendet die EXIF-Drehung von Handyfotos in
+  // allen Browsern an. createImageBitmap ignoriert sie je nach Browser — die
+  // OCR bekäme das Etikett um 90° gekippt und läse gar nichts.
+  const url=URL.createObjectURL(file);
+  const img = await new Promise((res,rej)=>{
+    const i=new Image();
+    i.onload=()=>res(i); i.onerror=()=>rej(new Error('Bild nicht lesbar'));
+    i.src=url;
+  }).finally(()=>URL.revokeObjectURL(url));
+  const targetW = Math.min(1700, Math.max(1200, img.naturalWidth));
+  const scale = targetW/img.naturalWidth;
+  const w=Math.round(img.naturalWidth*scale), h=Math.round(img.naturalHeight*scale);
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   const ctx=c.getContext('2d',{willReadFrequently:true});
+  ctx.imageSmoothingQuality='high';   // billige Standard-Skalierung macht feine Schrift zu Brei
   ctx.drawImage(img,0,0,w,h);
   // Graustufen + Kontrast-Streckung (5.–95. Perzentil)
   const d=ctx.getImageData(0,0,w,h), px=d.data;
@@ -1290,8 +1310,11 @@ async function preprocess(file){
 
 /* Lokale (adaptive) Binarisierung: Schwelle je Pixel aus dem Mittelwert der
    Umgebung (Integralbild). Gleicht Schatten und Wölbungen aus, wie sie auf
-   zerknitterten Tüten entstehen — da versagt die globale Streckung oben. */
-function adaptiveBinarize(src){
+   zerknitterten Tüten entstehen — da versagt die globale Streckung oben.
+   flip=true sucht stattdessen HELLE Schrift (weiß auf rotem Panel o. Ä.):
+   sattes Rot wird in Graustufen nur Mittelgrau, weiße Schrift darauf ist
+   für die OCR unsichtbar — als heller Ausreißer gegen die Umgebung nicht. */
+function adaptiveBinarize(src, flip){
   const w=src.width, h=src.height;
   const c=document.createElement('canvas'); c.width=w; c.height=h;
   const ctx=c.getContext('2d',{willReadFrequently:true});
@@ -1319,7 +1342,8 @@ function adaptiveBinarize(src){
       const x0=Math.max(0,x-half), x1=Math.min(w-1,x+half);
       const area=(y1-y0+1)*(x1-x0+1);
       const sum=integ[(y1+1)*W+x1+1]-integ[y0*W+x1+1]-integ[(y1+1)*W+x0]+integ[y0*W+x0];
-      const v = gray[y*w+x]*area < sum*bias ? 0 : 255;
+      const g=gray[y*w+x]*area;
+      const v = (flip ? g > sum*(2-bias) : g < sum*bias) ? 0 : 255;
       if(!v) black++;
       const i=(y*w+x)*4;
       px[i]=px[i+1]=px[i+2]=v;
@@ -1360,25 +1384,42 @@ async function handleImageFile(file){
     });
     scanLabel='Lese Etikett …';
     $('#scanStatus').textContent=scanLabel;
+    const dbg=[];
     const {data:{text}} = await worker.recognize(canvas);
+    dbg.push({pass:'Durchlauf 1 (Graustufen)',text});
     let parsed = parseNutrition(text);
-    // Fehlen Pflichtfelder (z. B. zerknitterte Tüte, Schatten)? Zweiter Versuch
-    // mit lokal binarisiertem Bild. Ballaststoffe zählen nicht: die sind auf
-    // EU-Etiketten freiwillig, sonst liefe der zweite Durchlauf fast immer.
-    if(NUTRI_FIELDS.some(f=>f.key!=='fiber' && parsed.values[f.key]==null)){
+    // Fehlen Pflichtfelder? Rettungs-Durchläufe. Ballaststoffe zählen nicht:
+    // die sind auf EU-Etiketten freiwillig, sonst liefe das fast immer.
+    // Jeder Durchlauf füllt nur fehlende Werte auf — Durchlauf 1 (Graustufen)
+    // bleibt die Wahrheit, und ein Fehler darf frühere Ergebnisse nicht kosten.
+    const missingCore = p => NUTRI_FIELDS.some(f=>f.key!=='fiber' && p.values[f.key]==null);
+    if(missingCore(parsed)){
       scanLabel='Schwer zu lesen — zweiter Versuch …';
       $('#scanStatus').textContent=scanLabel;
       $('#scanProgress').style.width='0%';
-      // Nur fehlende Werte auffüllen — Durchlauf 1 (Graustufen) bleibt die
-      // Wahrheit, und ein Fehler hier darf seine Ergebnisse nicht wegwerfen
       try{
         const {data:{text:text2}} = await worker.recognize(adaptiveBinarize(canvas));
+        dbg.push({pass:'Durchlauf 2 (binarisiert)',text:text2});
         parsed = mergeParsed(parsed, parseNutrition(text2));
-      }catch(err2){ console.warn('Zweiter Durchlauf fehlgeschlagen:', err2); }
+      }catch(err2){ console.warn('Zweiter Durchlauf fehlgeschlagen:', err2); dbg.push({pass:'Durchlauf 2',text:'FEHLER: '+err2}); }
     }
+    if(missingCore(parsed)){
+      scanLabel='Helle Schrift? — noch ein Versuch …';
+      $('#scanStatus').textContent=scanLabel;
+      $('#scanProgress').style.width='0%';
+      try{
+        const {data:{text:text3}} = await worker.recognize(adaptiveBinarize(canvas,true));
+        dbg.push({pass:'Durchlauf 3 (helle Schrift)',text:text3});
+        parsed = mergeParsed(parsed, parseNutrition(text3));
+      }catch(err3){ console.warn('Dritter Durchlauf fehlgeschlagen:', err3); dbg.push({pass:'Durchlauf 3',text:'FEHLER: '+err3}); }
+    }
+    $('#ocrDebug').open=false;
+    $('#ocrDebugText').textContent = `Bild: ${canvas.width}×${canvas.height}px\n\n`+
+      dbg.map(d=>`── ${d.pass} ──\n${(d.text||'').trim()||'(nichts erkannt)'}`).join('\n\n');
     showScanResult(parsed);
   }catch(err){
     console.error(err);
+    $('#ocrDebugText').textContent='Scan fehlgeschlagen: '+(err&&err.message||err);
     $('#scanStatus').textContent='Erkennung fehlgeschlagen — du kannst die Werte manuell eintragen.';
     setTimeout(()=>{ showScanResult({values:{},found:{},basis:'g',portion:null}); }, 900);
   }
