@@ -1360,7 +1360,8 @@ function adaptiveBinarize(src, flip){
 function mergeParsed(base,other){
   const m={values:{...base.values}, found:{...base.found},
     basis: base.basis==='ml'||other.basis==='ml' ? 'ml' : 'g',
-    portion: base.portion ?? other.portion};
+    portion: base.portion ?? other.portion,
+    kj: base.kj ?? other.kj};
   for(const f of NUTRI_FIELDS){
     if(m.values[f.key]==null && other.values[f.key]!=null){
       m.values[f.key]=other.values[f.key]; m.found[f.key]=other.found[f.key];
@@ -1413,6 +1414,7 @@ async function handleImageFile(file){
         parsed = mergeParsed(parsed, parseNutrition(text3));
       }catch(err3){ console.warn('Dritter Durchlauf fehlgeschlagen:', err3); dbg.push({pass:'Durchlauf 3',text:'FEHLER: '+err3}); }
     }
+    parsed.unsure = checkPlausibility(parsed);
     $('#ocrDebug').open=false;
     $('#ocrDebugText').textContent = `Bild: ${canvas.width}×${canvas.height}px\n\n`+
       dbg.map(d=>`── ${d.pass} ──\n${(d.text||'').trim()||'(nichts erkannt)'}`).join('\n\n');
@@ -1442,6 +1444,7 @@ function parseNutrition(text){
   const lines=text.split(/\n/).map(l=>l.trim()).filter(l=>l.length>1);
   const values={}, found={};
   let basis = /100\s*ml/i.test(text) ? 'ml' : 'g';
+  let kj=null;   // kJ separat merken — dient später als Gegenprobe zur kcal-Zahl
 
   for(const rawLine of lines){
     // OCR-Rauschen: doppeltes Dezimaltrennzeichen ("1,.2" / "1..2") → "1,2"
@@ -1453,9 +1456,9 @@ function parseNutrition(text){
       const m=low.match(/(\d[\d.,]*)\s*kcal/);
       if(m){ const v=toNum(m[1]); if(v!=null && v>5 && v<1200){ values.kcal=Math.round(v); found.kcal=true; } }
     }
-    if(values.kcal==null && /energie|brennwert/.test(low) && /kj/.test(low)){
+    if(kj==null && /energie|brennwert/.test(low) && /kj/.test(low)){
       const m=low.match(/(\d[\d.,]*)\s*kj/);
-      if(m){ const kj=toNum(m[1]); if(kj!=null && kj>50){ values.kcal=Math.round(kj/4.184); found.kcal='kj'; } }
+      if(m){ const v=toNum(m[1]); if(v!=null && v>50) kj=v; }
     }
 
     const grab=()=>{ // erste Zahl nach dem Schlüsselwort — bevorzugt mit "g"-Einheit
@@ -1478,13 +1481,49 @@ function parseNutrition(text){
     if(/salz/.test(low) && !/gesalzen/.test(low)){ if(values.salt==null){ const v=grab(); if(v!=null&&v<50){values.salt=v;found.salt=true;} } }
   }
 
+  // kJ nur als Fallback — eine direkt gelesene kcal-Zahl hat Vorrang
+  if(values.kcal==null && kj!=null){ values.kcal=Math.round(kj/4.184); found.kcal='kj'; }
+
   // Portionsgröße erkennen ("pro Portion (30 g)")
   let portion=null;
   const pm=text.match(/portion[^0-9]{0,12}(\d[\d.,]*)\s*(g|ml)/i);
   if(pm){ const v=toNum(pm[1]); if(v!=null && v>1 && v<1000) portion=v; }
 
-  return {values,found,basis,portion};
+  return {values,found,kj,basis,portion};
 }
+
+/* ── Plausibilitätsprüfung ──────────────────────────
+   Nährwerte müssen zusammenpassen: kcal ≈ kJ/4,184, kcal ≈ Atwater-Summe
+   (9·Fett + 4·KH + 4·Eiweiß + 2·Ballaststoffe), gesättigt ≤ Fett,
+   Zucker ≤ KH. Was dagegen verstößt, wurde fast sicher verlesen und wird
+   rot zur Kontrolle markiert — falsche Zahlen sind schlimmer als fehlende. */
+function checkPlausibility(p){
+  const v=p.values, u={};
+  if(v.satfat!=null && v.fat!=null && v.satfat>v.fat+0.05){ u.satfat=true; u.fat=true; }
+  if(v.sugar!=null && v.carbs!=null && v.sugar>v.carbs+0.05){ u.sugar=true; u.carbs=true; }
+  if(p.kj!=null && v.kcal!=null && found_direct(p)){
+    const fromKj=p.kj/4.184;
+    if(Math.abs(fromKj-v.kcal)>Math.max(15,v.kcal*.2)) u.kcal=true;
+  }
+  if(v.kcal!=null && v.fat!=null && v.carbs!=null && v.protein!=null){
+    const est=9*v.fat+4*v.carbs+4*v.protein+2*(v.fiber||0);
+    // Atwater passt nie exakt (Rundung, Polyole, Alkohol) — grobe Ausreißer
+    // entlarven aber verlesene Ziffern und verlorene Kommas
+    if(est>20 && (v.kcal<est*.55 || v.kcal>est*1.5)){
+      u.kcal=true;
+      // Übeltäter suchen: welcher Makro-Wert repariert /10 die Bilanz?
+      // (verlorenes Komma: "3,5" als "35" gelesen)
+      for(const k of ['fat','carbs','protein']){
+        if(!(v[k]>=10)) continue;
+        const est2=est-(k==='fat'?9:4)*v[k]*0.9;
+        if(v.kcal>=est2*.55 && v.kcal<=est2*1.5){ u[k]=true; delete u.kcal; break; }
+      }
+    }
+  }
+  return u;
+}
+// kcal wurde direkt gelesen (nicht bloß aus kJ berechnet)?
+const found_direct = p => p.found.kcal===true;
 
 /* ── Scan-Ergebnis anzeigen ── */
 function showScanResult(parsed){
@@ -1495,10 +1534,11 @@ function showScanResult(parsed){
   setToggle('pSaveProd',false);
   setBasis(parsed.basis||'g');
 
+  const unsure = parsed.unsure||{};
   const grid=$('#nutriInputs');
   grid.innerHTML = NUTRI_FIELDS.map(f=>{
     const v=parsed.values[f.key];
-    const missing = v==null;
+    const missing = v==null || unsure[f.key];
     return `<div class="field ${missing?'missing':''}">
       <label>${f.label}</label>
       <input type="number" step="any" inputmode="decimal" data-nutri="${f.key}" value="${v??''}" placeholder="?">
@@ -1506,10 +1546,11 @@ function showScanResult(parsed){
   }).join('');
 
   const foundCount = Object.keys(parsed.found).length;
+  const hasUnsure = Object.keys(unsure).length>0;
   $('#ocrHint').innerHTML = foundCount
-    ? (NUTRI_FIELDS.every(f=>parsed.values[f.key]!=null)
-        ? 'Alle Werte erkannt — kurz prüfen, dann eintragen.'
-        : `<b>Rot markierte Felder</b> wurden nicht sicher erkannt — bitte vom Etikett übernehmen.`)
+    ? (NUTRI_FIELDS.every(f=>parsed.values[f.key]!=null) && !hasUnsure
+        ? 'Alle Werte erkannt und in sich stimmig — kurz prüfen, dann eintragen.'
+        : `<b>Rot markierte Felder</b> wurden nicht sicher erkannt oder passen nicht zusammen — bitte vom Etikett übernehmen.`)
     : `<b>Keine Werte erkannt.</b> Foto näher &amp; gerader aufnehmen — oder Werte von Hand eintragen.`;
 
   $('#pPortion').value = parsed.portion ?? '';
@@ -1563,7 +1604,7 @@ $('#dateline').textContent = new Date().toLocaleDateString('de-DE',{weekday:'lon
 renderToday(); renderHistory();
 
 /* Test-Hook (für automatisierte Prüfung) */
-window._bw = {handleImageFile, parseNutrition, preprocess, adaptiveBinarize, mergeParsed, get state(){return {entries,products,settings};}};
+window._bw = {handleImageFile, parseNutrition, preprocess, adaptiveBinarize, mergeParsed, checkPlausibility, get state(){return {entries,products,settings};}};
 </script>
 </body>
 </html>
