@@ -228,6 +228,11 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .day-row:last-child{border-bottom:none}
 .day-row b{font-variant-numeric:tabular-nums;font-family:var(--serif)}
 .day-row .d{color:var(--muted);font-size:.8rem}
+.day-row.tap{cursor:pointer}
+.day-row.tap:active{background:var(--card)}
+.day-row.tap .d{flex:1}
+.day-row .chev{color:var(--muted);font-weight:700;margin-left:10px}
+.bar.tap{cursor:pointer}
 
 /* ── Suche ──────────────────────────── */
 .res-scroll{max-height:46dvh;overflow-y:auto;margin:2px -4px 0;padding:0 4px}
@@ -499,6 +504,17 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
   </div>
 </div>
 
+<div class="sheet" id="sheetDay">
+  <div class="sheet-inner">
+    <div class="grabber"></div>
+    <h3 id="dayTitle">Tag</h3>
+    <div class="sub" id="dayInfo"></div>
+    <table class="nutri" id="dayMacros"></table>
+    <div class="section-title" style="margin-top:18px">Gegessen</div>
+    <div id="dayEntries"></div>
+  </div>
+</div>
+
 <div class="sheet" id="sheetSettings">
   <div class="sheet-inner">
     <div class="grabber"></div>
@@ -652,12 +668,42 @@ function focusSoon(sel, delay=350){
 }
 
 /* ═══════════ Rendering: Heute ═══════════ */
-function todayTotals(){
+function dayTotals(ds){
   const t = {kcal:0,fat:0,satfat:0,carbs:0,sugar:0,fiber:0,protein:0,salt:0};
-  entries.filter(e=>e.date===todayStr()).forEach(e=>{
+  entries.filter(e=>e.date===ds).forEach(e=>{
     for(const k in t) t[k]+= e[k]||0;
   });
   return t;
+}
+const todayTotals = ()=> dayTotals(todayStr());
+function macroRows(t){
+  return `
+    <tr><td>Fett</td><td>${fmt1(t.fat)} g</td></tr>
+    <tr class="sub"><td>davon gesättigt</td><td>${fmt1(t.satfat)} g</td></tr>
+    <tr><td>Kohlenhydrate</td><td>${fmt1(t.carbs)} g</td></tr>
+    <tr class="sub"><td>davon Zucker</td><td>${fmt1(t.sugar)} g</td></tr>
+    <tr><td>Eiweiß</td><td>${fmt1(t.protein)} g</td></tr>
+    <tr><td>Salz</td><td>${fmt1(t.salt)} g</td></tr>`;
+}
+/* Eintragsliste (Heute-Ansicht und Tages-Detail teilen sich Markup + Verhalten) */
+function entryListHTML(list){
+  return `<div class="entry-list">`+ list.map(e=>`
+    <div class="entry tap" data-entry="${e.id}">
+      <div class="e-name"><b>${esc(e.name)}</b><span>${e.grams?fmt(e.grams)+' '+(e.unit||'g'):'&nbsp;'}</span></div>
+      <div class="e-kcal">${fmt(e.kcal)} <small>kcal</small></div>
+      <button class="e-del" data-del="${e.id}" aria-label="Löschen">✕</button>
+    </div>`).join('') + `</div>`;
+}
+function bindEntryList(wrap, returnDay, afterDelete){
+  wrap.querySelectorAll('[data-entry]').forEach(el=>el.addEventListener('click',()=>{
+    entryReturnDay=returnDay; openEntry(el.dataset.entry);
+  }));
+  wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',ev=>{
+    ev.stopPropagation();
+    entries = entries.filter(e=>e.id!==b.dataset.del);
+    save(LS.entries,entries); renderToday(); renderHistory();
+    afterDelete?.();
+  }));
 }
 function renderToday(){
   const t = todayTotals();
@@ -673,31 +719,15 @@ function renderToday(){
   bar.classList.toggle('over', over);
   $('#budgetNote').textContent = over ? 'Ziel überschritten' : Math.round(pct)+' % des Tagesziels';
 
-  $('#macroTable').innerHTML = `
-    <tr><td>Fett</td><td>${fmt1(t.fat)} g</td></tr>
-    <tr class="sub"><td>davon gesättigt</td><td>${fmt1(t.satfat)} g</td></tr>
-    <tr><td>Kohlenhydrate</td><td>${fmt1(t.carbs)} g</td></tr>
-    <tr class="sub"><td>davon Zucker</td><td>${fmt1(t.sugar)} g</td></tr>
-    <tr><td>Eiweiß</td><td>${fmt1(t.protein)} g</td></tr>
-    <tr><td>Salz</td><td>${fmt1(t.salt)} g</td></tr>`;
+  $('#macroTable').innerHTML = macroRows(t);
 
   const list = entries.filter(e=>e.date===todayStr()).reverse();
   const wrap = $('#todayEntries');
   if(!list.length){
     wrap.innerHTML = `<div class="empty"><span class="big">🥗</span>Noch nichts eingetragen.<br>Scanne dein erstes Etikett!</div>`;
   } else {
-    wrap.innerHTML = `<div class="entry-list">`+ list.map(e=>`
-      <div class="entry tap" data-entry="${e.id}">
-        <div class="e-name"><b>${esc(e.name)}</b><span>${e.grams?fmt(e.grams)+' '+(e.unit||'g'):'&nbsp;'}</span></div>
-        <div class="e-kcal">${fmt(e.kcal)} <small>kcal</small></div>
-        <button class="e-del" data-del="${e.id}" aria-label="Löschen">✕</button>
-      </div>`).join('') + `</div>`;
-    wrap.querySelectorAll('[data-entry]').forEach(el=>el.addEventListener('click',()=>openEntry(el.dataset.entry)));
-    wrap.querySelectorAll('[data-del]').forEach(b=>b.addEventListener('click',ev=>{
-      ev.stopPropagation();
-      entries = entries.filter(e=>e.id!==b.dataset.del);
-      save(LS.entries,entries); renderToday(); renderHistory();
-    }));
+    wrap.innerHTML = entryListHTML(list);
+    bindEntryList(wrap, null);
   }
 }
 const esc = s=> (s||'').replace(/[&<>"]/g, c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
@@ -718,14 +748,16 @@ function renderHistory(){
     days.map(d=>{
       const h = Math.max(2, d.kcal/max*100);
       const cls = d.ds===todayStr() ? 'today' : d.kcal===0 ? 'zero' : d.kcal>goal ? 'over' : '';
-      return `<div class="bar ${cls}" style="height:${d.kcal===0?2:h}%" title="${dateLabel(d.ds)}: ${fmt(d.kcal)} kcal"></div>`;
+      const tap = d.kcal>0 ? ` tap" data-day="${d.ds}` : '';
+      return `<div class="bar ${cls}${tap}" style="height:${d.kcal===0?2:h}%" title="${dateLabel(d.ds)}: ${fmt(d.kcal)} kcal"></div>`;
     }).join('');
   $('#chartLabels').innerHTML = days.map((d,i)=>`<span>${i%2===1?new Date(d.ds+'T12:00:00').getDate():''}</span>`).join('');
 
   const withData = [...days].reverse().filter(d=>d.kcal>0);
   $('#dayList').innerHTML = withData.length
-    ? withData.map(d=>`<div class="day-row"><span class="d">${dateLabel(d.ds)}</span><b>${fmt(d.kcal)} kcal</b></div>`).join('')
+    ? withData.map(d=>`<div class="day-row tap" data-day="${d.ds}"><span class="d">${dateLabel(d.ds)}</span><b>${fmt(d.kcal)} kcal</b><span class="chev">›</span></div>`).join('')
     : `<div class="day-row"><span class="d">Noch keine Daten</span></div>`;
+  $$('#view-history [data-day]').forEach(el=>el.addEventListener('click',()=>openDay(el.dataset.day)));
 }
 
 /* ═══════════ Rendering: Produkte ═══════════ */
@@ -896,8 +928,25 @@ async function searchOnline(){
 }
 $('#btnOnlineSearch').addEventListener('click', searchOnline);
 
+/* ═══════════ Tages-Detail (Verlauf) ═══════════ */
+function openDay(ds){
+  const t=dayTotals(ds), goal=settings.goal||2000;
+  const list=entries.filter(e=>e.date===ds).reverse();
+  $('#dayTitle').textContent = new Date(ds+'T12:00:00').toLocaleDateString('de-DE',{weekday:'long',day:'numeric',month:'long'});
+  $('#dayInfo').textContent = `${fmt(t.kcal)} von ${fmt(goal)} kcal · ${list.length} ${list.length===1?'Eintrag':'Einträge'}`;
+  $('#dayMacros').innerHTML = macroRows(t);
+  const wrap=$('#dayEntries');
+  wrap.innerHTML = entryListHTML(list);
+  bindEntryList(wrap, ds, ()=>{
+    if(entries.some(e=>e.date===ds)) openDay(ds);
+    else { closeSheet(); toast('Eintrag gelöscht'); }
+  });
+  openSheet('sheetDay');
+}
+
 /* ═══════════ Eintrag-Detail ═══════════ */
 let entryDetail=null;
+let entryReturnDay=null;   // gesetzt, wenn der Eintrag aus dem Tages-Detail geöffnet wurde
 function openEntry(id){
   const e = entries.find(x=>x.id===id);
   if(!e) return;
@@ -963,7 +1012,10 @@ $('#btnEntToProd').addEventListener('click',()=>{
 $('#btnEntDelete').addEventListener('click',()=>{
   if(!entryDetail) return;
   entries = entries.filter(x=>x.id!==entryDetail.id);
-  save(LS.entries,entries); renderToday(); renderHistory(); closeSheet();
+  save(LS.entries,entries); renderToday(); renderHistory();
+  // Aus dem Tages-Detail gekommen? Dann dorthin zurück (solange der Tag noch Einträge hat)
+  if(entryReturnDay && entries.some(e=>e.date===entryReturnDay)) openDay(entryReturnDay);
+  else closeSheet();
   toast('Eintrag gelöscht');
 });
 
