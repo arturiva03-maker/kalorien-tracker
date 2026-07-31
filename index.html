@@ -76,7 +76,7 @@ table.nutri.cols3 tr.head td:nth-child(2),table.nutri.cols3 tr.head td:last-chil
 
 /* ── Aktionen ───────────────────────── */
 .actions{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:16px 0}
-.actions .btn-scan{grid-column:1 / -1}
+.actions .btn-scan,.actions .btn-wide{grid-column:1 / -1}
 .btn{
   border:2px solid var(--ink);border-radius:16px;padding:15px 18px;cursor:pointer;
   font-family:var(--sans);font-weight:700;font-size:1rem;display:flex;align-items:center;justify-content:center;gap:9px;
@@ -212,6 +212,17 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .progress{height:10px;border:2px solid var(--ink);border-radius:99px;overflow:hidden;background:var(--card)}
 .progress i{display:block;height:100%;width:0%;background:var(--coral);transition:width .3s}
 .scan-tip{font-size:.75rem;color:var(--muted);margin-top:12px}
+
+/* ── Barcode-Kamera ─────────────────── */
+.cam-wrap{
+  position:relative;width:100%;aspect-ratio:4/3;background:#111;overflow:hidden;
+  border:2px solid var(--ink);border-radius:14px;margin-bottom:12px;
+}
+.cam-wrap video{width:100%;height:100%;object-fit:cover;display:block}
+.cam-frame{
+  position:absolute;left:8%;right:8%;top:32%;bottom:32%;
+  border:3px solid var(--coral);border-radius:10px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35);
+}
 .ocr-debug{margin-top:14px;font-size:.72rem;color:var(--muted)}
 .ocr-debug summary{cursor:pointer;font-weight:700}
 .ocr-debug pre{
@@ -304,9 +315,13 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
     </div>
 
     <div class="actions">
-      <button class="btn btn-scan" id="btnScan">
+      <button class="btn btn-scan" id="btnBarcode">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7V5a2 2 0 0 1 2-2h2M17 3h2a2 2 0 0 1 2 2v2M21 17v2a2 2 0 0 1-2 2h-2M7 21H5a2 2 0 0 1-2-2v-2"/><path d="M7 8v8M10.5 8v8M14 8v8M17 8v8"/></svg>
+        Barcode scannen
+      </button>
+      <button class="btn btn-ghost btn-wide" id="btnScan">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
-        Etikett scannen
+        Etikett fotografieren
       </button>
       <button class="btn btn-ghost" id="btnFind">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
@@ -515,6 +530,27 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
   </div>
 </div>
 
+<div class="sheet" id="sheetBarcode">
+  <div class="sheet-inner">
+    <div class="grabber"></div>
+    <h3>Barcode scannen</h3>
+    <div class="sub">Werte kommen exakt aus der Datenbank — kein Raten.</div>
+    <div class="cam-wrap">
+      <video id="camVideo" playsinline muted></video>
+      <div class="cam-frame"></div>
+    </div>
+    <div class="scan-status" id="barcodeStatus">Kamera wird gestartet …</div>
+    <div class="hint" id="barcodeHint">Strichcode quer ins Feld halten, 10–20 cm Abstand.</div>
+    <div class="field">
+      <label>Oder Nummer eintippen</label>
+      <input type="number" id="barcodeManual" inputmode="numeric" placeholder="z. B. 4001417017007">
+    </div>
+    <div class="sheet-btns">
+      <button class="btn btn-green btn-block" id="btnBarcodeLookup">Nummer nachschlagen</button>
+    </div>
+  </div>
+</div>
+
 <div class="sheet" id="sheetDay">
   <div class="sheet-inner">
     <div class="grabber"></div>
@@ -595,6 +631,7 @@ let openSheetEl=null, savedScroll=0;
 function openSheet(id){
   const el=$('#'+id);
   if(openSheetEl===el) return;              // schon offen: nicht neu animieren
+  if(openSheetEl && openSheetEl.id==='sheetBarcode') stopCam?.();
   if(openSheetEl) openSheetEl.classList.remove('open');
   else {                                    // erstes Sheet: Seite dahinter festhalten
     savedScroll=window.scrollY;
@@ -609,6 +646,7 @@ function openSheet(id){
 
 function closeSheet(){
   if(!openSheetEl) return;
+  if(openSheetEl.id==='sheetBarcode') stopCam?.();   // Kamera nie weiterlaufen lassen
   openSheetEl.classList.remove('open');
   openSheetEl.style.transform='';
   openSheetEl=null;
@@ -1245,6 +1283,197 @@ $$('nav button').forEach(b=>b.addEventListener('click',()=>{
   if(b.dataset.view==='history') renderHistory();
 }));
 
+/* ═══════════ Barcode ═══════════
+   Zuverlässiger als jede Texterkennung: Strichcodes sind dafür gemacht,
+   von Maschinen gelesen zu werden. Die Nummer wird bei Open Food Facts
+   nachgeschlagen — die Werte stammen dann aus der Datenbank statt aus
+   einem Foto. Fällt das Produkt dort durch, bleibt das Etikett-Foto. */
+const BARCODE_FORMATS=['ean_13','ean_8','upc_a','upc_e'];
+let zxingReader=null, nativeDetector=null;
+
+async function getBarcodeReader(){
+  // Nativ (Android-Chrome) ist schneller und akkuschonender
+  if(nativeDetector) return {native:nativeDetector};
+  if(typeof BarcodeDetector!=='undefined'){
+    try{
+      const supported=await BarcodeDetector.getSupportedFormats();
+      const formats=BARCODE_FORMATS.filter(f=>supported.includes(f));
+      if(formats.length){ nativeDetector=new BarcodeDetector({formats}); return {native:nativeDetector}; }
+    }catch(e){ console.warn('BarcodeDetector nicht nutzbar:', e); }
+  }
+  if(zxingReader) return {zxing:zxingReader};
+  await new Promise((res,rej)=>{
+    const s=document.createElement('script');
+    s.src='https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js';
+    s.onload=res; s.onerror=()=>rej(new Error('Barcode-Bibliothek konnte nicht geladen werden'));
+    document.head.appendChild(s);
+  });
+  const hints=new Map();
+  hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS,
+    [ZXing.BarcodeFormat.EAN_13,ZXing.BarcodeFormat.EAN_8,ZXing.BarcodeFormat.UPC_A,ZXing.BarcodeFormat.UPC_E]);
+  hints.set(ZXing.DecodeHintType.TRY_HARDER, true);
+  zxingReader=new ZXing.MultiFormatReader();
+  zxingReader.setHints(hints);
+  return {zxing:zxingReader};
+}
+
+/* Einen Frame (Canvas/Video) nach einem Barcode absuchen → Nummer oder null */
+async function detectBarcode(reader, source){
+  if(reader.native){
+    const codes=await reader.native.detect(source);
+    return codes && codes.length ? codes[0].rawValue : null;
+  }
+  const c = source instanceof HTMLCanvasElement ? source : (()=>{
+    const t=document.createElement('canvas');
+    t.width=source.videoWidth||source.naturalWidth||source.width;
+    t.height=source.videoHeight||source.naturalHeight||source.height;
+    t.getContext('2d').drawImage(source,0,0,t.width,t.height);
+    return t;
+  })();
+  if(!c.width||!c.height) return null;
+  const d=c.getContext('2d',{willReadFrequently:true}).getImageData(0,0,c.width,c.height);
+  const lum=new ZXing.RGBLuminanceSource(
+    (()=>{ const a=new Uint8ClampedArray(c.width*c.height);
+      for(let i=0,j=0;i<d.data.length;i+=4,j++) a[j]=(d.data[i]*.299+d.data[i+1]*.587+d.data[i+2]*.114)|0;
+      return a; })(), c.width, c.height);
+  try{
+    const bmp=new ZXing.BinaryBitmap(new ZXing.HybridBinarizer(lum));
+    return reader.zxing.decode(bmp).getText();
+  }catch(e){ return null; }   // NotFoundException = in diesem Frame kein Code
+  finally{ reader.zxing.reset(); }
+}
+
+/* Ein ganzes Foto nach einem Barcode absuchen. Im Foto ist der Code oft
+   klein und irgendwo am Rand — nach dem Herunterrechnen aufs ganze Bild
+   verschwindet er. Deshalb zusätzlich in überlappenden Querstreifen
+   suchen, jeder für sich vergrößert. */
+async function findBarcode(reader, img){
+  const natW=img.naturalWidth||img.width, natH=img.naturalHeight||img.height;
+  const cut=(sx,sy,sw,sh,outW)=>{
+    const t=document.createElement('canvas');
+    const s=Math.min(outW/sw, 2.5);
+    t.width=Math.round(sw*s); t.height=Math.round(sh*s);
+    const c=t.getContext('2d',{willReadFrequently:true});
+    c.imageSmoothingQuality='high';
+    c.drawImage(img,sx,sy,sw,sh,0,0,t.width,t.height);
+    return t;
+  };
+  // Ganzes Bild, dann drei Streifen mit lückenloser Abdeckung. Mehr Versuche
+  // finden kaum mehr, kosten aber spürbar Zeit bei jedem Foto ohne Barcode.
+  const versuche=[()=>cut(0,0,natW,natH,1800)];
+  const bandH=Math.round(natH*.34);
+  for(let i=0;i<3;i++){
+    const y=Math.min(Math.round(i*natH*.33), natH-bandH);
+    versuche.push(()=>cut(0,y,natW,bandH,1600));
+  }
+  for(const mk of versuche){
+    try{
+      const code=await detectBarcode(reader, mk());
+      if(code && /^\d{8,14}$/.test(code)) return code;
+    }catch(e){ /* dieser Ausschnitt hat keinen Code */ }
+  }
+  return null;
+}
+
+/* Produkt per Nummer bei Open Food Facts holen (mit Zwischenspeicher).
+   Der Produkt-Endpunkt ist nicht so streng limitiert wie die Textsuche. */
+async function lookupBarcode(ean){
+  const key='ean:'+ean;
+  if(offCache[key]) return offCache[key];
+  const url=`https://world.openfoodfacts.org/api/v2/product/${encodeURIComponent(ean)}.json`
+    +'?fields=product_name,product_name_de,brands,serving_size,nutriments';
+  const res=await fetch(url);
+  if(!res.ok) throw new Error('HTTP '+res.status);
+  const data=await res.json();
+  if(data.status!==1 || !data.product) return null;
+  const p=offMap(data.product);
+  if(!p) return null;
+  // Portionsgröße mitnehmen, wenn angegeben ("30 g")
+  const sm=(data.product.serving_size||'').match(/(\d[\d.,]*)\s*(g|ml)/i);
+  if(sm) p.portion=toNum(sm[1]);
+  offCache[key]=p;
+  const keys=Object.keys(offCache);
+  if(keys.length>60) keys.slice(0,keys.length-60).forEach(k=>delete offCache[k]);
+  save(LS.offCache, offCache);
+  return p;
+}
+
+let camStream=null, scanLoopId=null;
+function stopCam(){
+  if(scanLoopId){ cancelAnimationFrame(scanLoopId); scanLoopId=null; }
+  if(camStream){ camStream.getTracks().forEach(t=>t.stop()); camStream=null; }
+  $('#camVideo').srcObject=null;
+}
+
+async function onBarcodeFound(ean){
+  stopCam();
+  $('#barcodeStatus').textContent=`Barcode ${ean} — frage Datenbank …`;
+  try{
+    const p=await lookupBarcode(ean);
+    if(!p){
+      $('#barcodeStatus').textContent='Nicht in der Datenbank.';
+      $('#barcodeHint').innerHTML=`<b>${esc(ean)}</b> ist bei Open Food Facts nicht hinterlegt — fotografiere das Etikett oder trage die Werte von Hand ein.`;
+      return;
+    }
+    closeSheet();
+    openPortion(p);                       // fertiges Produkt → Portionsabfrage
+    if(p.portion) $('#portGrams').value=p.portion, $('#portGrams').dispatchEvent(new Event('input'));
+    toast(`${p.name} gefunden ✓`);
+  }catch(e){
+    console.warn('Barcode-Abfrage:', e);
+    $('#barcodeStatus').textContent='Abfrage fehlgeschlagen.';
+    $('#barcodeHint').innerHTML='<b>Kein Netz?</b> Die Datenbank ist gerade nicht erreichbar.';
+  }
+}
+
+$('#btnBarcode').addEventListener('click', async ()=>{
+  $('#barcodeStatus').textContent='Kamera wird gestartet …';
+  $('#barcodeHint').textContent='Strichcode quer ins Feld halten, 10–20 cm Abstand.';
+  $('#barcodeManual').value='';
+  openSheet('sheetBarcode');
+  let reader;
+  try{ reader=await getBarcodeReader(); }
+  catch(e){ $('#barcodeStatus').textContent='Barcode-Erkennung nicht verfügbar.'; return; }
+  try{
+    camStream=await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'},width:{ideal:1280}}});
+  }catch(e){
+    console.warn('Kamera:', e);
+    $('#barcodeStatus').textContent='Kein Kamerazugriff.';
+    $('#barcodeHint').innerHTML='<b>Kamera blockiert.</b> Erlaube den Zugriff in den Browser-Einstellungen — oder tippe die Nummer unten ein.';
+    return;
+  }
+  const v=$('#camVideo');
+  v.srcObject=camStream; v.play().catch(()=>{});
+  $('#barcodeStatus').textContent='Suche Barcode …';
+  const work=document.createElement('canvas');
+  let busy=false;
+  const tick=async ()=>{
+    if(!camStream) return;
+    if(!busy && v.videoWidth){
+      busy=true;
+      try{
+        // Nur den Bereich im Rahmen absuchen — schneller und weniger Fehltreffer
+        const vw=v.videoWidth, vh=v.videoHeight;
+        const rx=Math.round(vw*.08), ry=Math.round(vh*.32);
+        const rw=Math.round(vw*.84), rh=Math.round(vh*.36);
+        work.width=rw; work.height=rh;
+        work.getContext('2d',{willReadFrequently:true}).drawImage(v,rx,ry,rw,rh,0,0,rw,rh);
+        const code=await detectBarcode(reader, work);
+        if(code && /^\d{8,14}$/.test(code)){ busy=false; onBarcodeFound(code); return; }
+      }catch(e){ /* einzelner Frame ohne Treffer */ }
+      busy=false;
+    }
+    scanLoopId=requestAnimationFrame(tick);
+  };
+  scanLoopId=requestAnimationFrame(tick);
+});
+
+$('#btnBarcodeLookup').addEventListener('click',()=>{
+  const ean=$('#barcodeManual').value.trim();
+  if(!/^\d{8,14}$/.test(ean)){ toast('Bitte die 8–13-stellige Nummer eintippen'); return; }
+  onBarcodeFound(ean);
+});
+
 /* ═══════════ OCR: Scan-Flow ═══════════ */
 let ocrWorker=null, scanParsed=null;
 $('#btnScan').addEventListener('click',()=>$('#camInput').click());
@@ -1420,6 +1649,26 @@ async function handleImageFile(file){
   openSheet('sheetScan');
   try{
     const img = await loadImage(file);
+
+    // Ist zufällig ein Barcode mit im Bild (er steht oft neben der Tabelle)?
+    // Dann kommen die Werte exakt aus der Datenbank statt aus der Texterkennung.
+    try{
+      $('#scanStatus').textContent='Suche Barcode im Foto …';
+      const reader=await getBarcodeReader();
+      const ean=await findBarcode(reader,img);
+      if(ean){
+        $('#scanStatus').textContent=`Barcode ${ean} — frage Datenbank …`;
+        const p=await lookupBarcode(ean);
+        if(p){
+          $('#ocrDebugText').textContent=`Barcode ${ean} im Foto gefunden — Werte aus Open Food Facts, keine Texterkennung nötig.`;
+          showScanResult({values:{...p.per100}, found:{}, basis:p.basis, portion:p.portion??null, unsure:{}});
+          $('#pName').value=p.name;
+          $('#ocrHint').innerHTML=`Werte aus der Datenbank zum Barcode <b>${esc(ean)}</b> — exakt, kein Raten. Quelle: Open Food Facts.`;
+          return;
+        }
+      }
+    }catch(e){ console.warn('Barcode im Foto:', e); }
+
     const canvas = prepCanvas(img);
     const worker = await getWorker((label,p)=>{
       $('#scanStatus').textContent=label;
@@ -1693,7 +1942,7 @@ $('#dateline').textContent = new Date().toLocaleDateString('de-DE',{weekday:'lon
 renderToday(); renderHistory();
 
 /* Test-Hook (für automatisierte Prüfung) */
-window._bw = {handleImageFile, parseNutrition, preprocess, prepCanvas, loadImage, adaptiveBinarize, mergeParsed, checkPlausibility, scoreParsed, zoomRect, get state(){return {entries,products,settings};}};
+window._bw = {handleImageFile, parseNutrition, preprocess, prepCanvas, loadImage, adaptiveBinarize, mergeParsed, checkPlausibility, scoreParsed, zoomRect, getBarcodeReader, detectBarcode, findBarcode, lookupBarcode, get state(){return {entries,products,settings};}};
 </script>
 </body>
 </html>
