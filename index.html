@@ -521,6 +521,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
     </div>
     <div class="sheet-btns">
       <button class="btn btn-green btn-block" id="btnPortAdd">Für heute eintragen</button>
+      <button class="btn btn-ghost btn-block" id="btnPortEdit">Werte anpassen</button>
       <button class="btn btn-ghost btn-block" id="btnPortDelete" style="box-shadow:none;border-color:var(--coral);color:var(--coral)">Produkt löschen</button>
     </div>
     <button class="save-toggle" id="portSaveProd" aria-pressed="false">
@@ -1132,7 +1133,7 @@ $('#btnEntSave').addEventListener('click',()=>{
 });
 
 /* ═══════════ Portion-Sheet ═══════════ */
-let portionProduct=null;
+let portionProduct=null, portionFromLibrary=false;
 /* Nimmt eine Produkt-ID aus der Bibliothek oder ein fertiges Produkt-Objekt
    (Treffer aus der Datenbank / von Open Food Facts). Bei Bibliotheks-
    Produkten gibt es „löschen", sonst den Speichern-Toggle. */
@@ -1140,6 +1141,7 @@ function openPortion(idOrProduct){
   const fromLibrary = typeof idOrProduct === 'string';
   portionProduct = fromLibrary ? products.find(p=>p.id===idOrProduct) : idOrProduct;
   if(!portionProduct) return;
+  portionFromLibrary = fromLibrary;
   $('#btnPortDelete').classList.toggle('hidden', !fromLibrary);
   $('#portSaveProd').classList.toggle('hidden', fromLibrary);
   setToggle('portSaveProd', false);
@@ -1167,6 +1169,23 @@ $('#btnPortAdd').addEventListener('click',()=>{
   addEntryFromProduct(p, g);
   if(keep) toast(`${p.name} eingetragen + gespeichert ✓`);
   closeSheet();
+});
+/* Werte anpassen: dieselbe Maske wie nach einem Etikett-Scan, nur schon
+   gefüllt. Bei einem gespeicherten Produkt überschreiben die Änderungen es,
+   statt ein Duplikat anzulegen. */
+$('#btnPortEdit').addEventListener('click',()=>{
+  const p=portionProduct; if(!p) return;
+  const g=parseFloat($('#portGrams').value);
+  showScanResult({values:{...p.per100}, found:{}, basis:p.basis,
+    portion:(g>0?g:(p.portion??null)), unsure:{}});
+  scanEditId = portionFromLibrary ? p.id : null;
+  $('#pName').value = p.name;
+  $('#pSaveProd').classList.toggle('hidden', !!scanEditId);
+  $('#ocrHint').textContent = scanEditId
+    ? 'Änderungen überschreiben das gespeicherte Produkt.'
+    : 'Werte aus der Datenbank — hier anpassen, falls etwas nicht stimmt.';
+  $('#ocrDebugText').textContent = 'Werte stammen aus der Datenbank, nicht aus einer Texterkennung.';
+  openSheet('sheetScan');
 });
 $('#btnPortDelete').addEventListener('click',()=>{
   if(!confirm(`„${portionProduct.name}" wirklich löschen?`)) return;
@@ -1490,7 +1509,7 @@ $('#btnBarcodeLookup').addEventListener('click',()=>{
 });
 
 /* ═══════════ OCR: Scan-Flow ═══════════ */
-let ocrWorker=null, scanParsed=null;
+let ocrWorker=null, scanParsed=null, scanEditId=null;
 $('#btnScan').addEventListener('click',()=>$('#camInput').click());
 $('#camInput').addEventListener('change',e=>{
   const f=e.target.files[0];
@@ -1923,6 +1942,9 @@ function scoreParsed(p){
 /* ── Scan-Ergebnis anzeigen ── */
 function showScanResult(parsed){
   scanParsed=parsed;
+  // Standardfall: neues Produkt. „Werte anpassen" setzt das danach ggf. um.
+  scanEditId=null;
+  $('#pSaveProd').classList.remove('hidden');
   $('#scanStage').classList.add('hidden');
   $('#scanResult').classList.remove('hidden');
   $('#pName').value='';
@@ -1976,20 +1998,32 @@ function buildProduct(){
   const basis=$('#basisSeg .on').dataset.basis;
   return {id:uid(), name, basis, per100:currentPer100()};
 }
+/* Bearbeitetes Bibliotheks-Produkt aktualisieren statt doppelt anlegen */
+function applyScanEdit(p){
+  if(!scanEditId) return false;
+  const alt=products.find(x=>x.id===scanEditId);
+  if(!alt) return false;
+  alt.name=p.name; alt.basis=p.basis; alt.per100=p.per100;
+  save(LS.products,products); renderProducts();
+  return true;
+}
 $('#btnScanAdd').addEventListener('click',()=>{
   const g=parseFloat($('#pPortion').value);
   if(!(g>0)){ toast('Portionsgröße fehlt'); $('#pPortion').focus(); return; }
   const p=buildProduct();
   if(!(p.per100.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
-  const keep=toggleOn('pSaveProd');
+  const aktualisiert=applyScanEdit(p);
+  const keep=!aktualisiert && toggleOn('pSaveProd');
   if(keep){ products.push(p); save(LS.products,products); renderProducts(); }
   addEntryFromProduct(p,g);
-  if(keep) toast(`${p.name} eingetragen + gespeichert ✓`);
+  if(aktualisiert) toast(`${p.name} eingetragen + Produkt aktualisiert ✓`);
+  else if(keep) toast(`${p.name} eingetragen + gespeichert ✓`);
   closeSheet();
 });
 $('#btnScanSave').addEventListener('click',()=>{
   const p=buildProduct();
   if(!(p.per100.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
+  if(applyScanEdit(p)){ closeSheet(); toast(`${p.name} aktualisiert ✓`); return; }
   products.push(p); save(LS.products,products);
   renderProducts(); closeSheet(); toast(`${p.name} gespeichert ✓`);
 });
