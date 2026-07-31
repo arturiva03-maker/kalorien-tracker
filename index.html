@@ -571,6 +571,11 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
       <label>Tagesziel (kcal)</label>
       <input type="number" id="sGoal" inputmode="numeric">
     </div>
+    <button class="save-toggle" id="sPaddle" aria-pressed="false">
+      <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+      Neue Texterkennung (Beta)
+    </button>
+    <div class="hint" id="sPaddleHint" style="margin:6px 0 0"></div>
     <div class="sheet-btns">
       <button class="btn btn-green btn-block" id="btnSaveSettings">Speichern</button>
       <button class="btn btn-ghost btn-block" id="btnExport">Backup herunterladen (JSON)</button>
@@ -1243,13 +1248,23 @@ $('#btnManualAdd').addEventListener('click',()=>{
 });
 
 /* ═══════════ Einstellungen ═══════════ */
+const PADDLE_HINT={
+  on:'Liest Zahlen sauberer (kein „1,8 g" → „1,89"), lädt beim ersten Scan einmalig ~15 MB Modelle und braucht pro Etikett etwas länger.',
+  off:'Standard: Tesseract — sofort startklar, verwechselt aber gelegentlich Einheiten mit Ziffern.'
+};
+initSaveToggle('sPaddle', on=>{ $('#sPaddleHint').textContent = on?PADDLE_HINT.on:PADDLE_HINT.off; });
 $('#btnSettings').addEventListener('click',()=>{
   $('#sGoal').value=settings.goal;
+  const on=settings.ocr==='paddle';
+  setToggle('sPaddle', on);
+  $('#sPaddleHint').textContent = on?PADDLE_HINT.on:PADDLE_HINT.off;
   openSheet('sheetSettings');
 });
 $('#btnSaveSettings').addEventListener('click',()=>{
   const g=parseInt($('#sGoal').value);
-  if(g>0){ settings.goal=g; save(LS.settings,settings); }
+  if(g>0){ settings.goal=g; }
+  settings.ocr = toggleOn('sPaddle') ? 'paddle' : 'tesseract';
+  save(LS.settings,settings);
   renderToday(); renderHistory(); closeSheet(); toast('Gespeichert ✓');
 });
 $('#btnExport').addEventListener('click',()=>{
@@ -1483,7 +1498,45 @@ $('#camInput').addEventListener('change',e=>{
   e.target.value='';
 });
 
+/* ── Texterkennung: zwei Motoren ────────────────────
+   Tesseract ist schnell und braucht keinen Extra-Download, verklebt aber
+   gern Einheiten mit Zahlen ("1,8 g" → "1,89"). PaddleOCR (PP-OCRv5,
+   lateinisches Modell) liest solche Zeilen sauber, lädt dafür einmalig
+   Modelle nach und braucht mehr Zeit. Umschaltbar in den Einstellungen,
+   damit sich am echten Etikett zeigen kann, welcher besser passt. */
 let scanLabel='Lese Etikett …';
+const usePaddle = ()=> settings.ocr==='paddle';
+let paddleSvc=null;
+async function getPaddle(onProgress){
+  if(paddleSvc) return paddleSvc;
+  onProgress?.('Lade neue Texterkennung (einmalig) …', 0);
+  const M=await import('https://esm.sh/ppu-paddle-ocr@6.2.0/web');
+  const svc=new M.PaddleOcrService({model:M.V5_LATIN_MOBILE_MODEL});
+  await svc.initialize();
+  paddleSvc=svc;
+  return paddleSvc;
+}
+
+/* Einheitliches Ergebnis beider Motoren: {text, words:[{text,bbox,confidence}]} */
+async function recognizeText(canvas, onProgress){
+  if(usePaddle()){
+    const svc=await getPaddle(onProgress);
+    onProgress?.(scanLabel, .1);
+    const r=await svc.recognize(canvas);
+    const words=[];
+    for(const zeile of (r.lines||[])) for(const w of (Array.isArray(zeile)?zeile:[zeile])){
+      if(!w || !w.box) continue;
+      words.push({text:w.text, confidence:Math.round((w.confidence??1)*100),
+        bbox:{x0:w.box.x, y0:w.box.y, x1:w.box.x+w.box.width, y1:w.box.y+w.box.height}});
+    }
+    onProgress?.(scanLabel, 1);
+    return {text:r.text||'', words};
+  }
+  const worker=await getWorker(onProgress);
+  const {data}=await worker.recognize(canvas);
+  return {text:data.text||'', words:data.words||[]};
+}
+
 async function getWorker(onProgress){
   if(ocrWorker) return ocrWorker;
   ocrWorker = await Tesseract.createWorker('deu', 1, {
@@ -1670,16 +1723,16 @@ async function handleImageFile(file){
     }catch(e){ console.warn('Barcode im Foto:', e); }
 
     const canvas = prepCanvas(img);
-    const worker = await getWorker((label,p)=>{
+    const fortschritt=(label,p)=>{
       $('#scanStatus').textContent=label;
       $('#scanProgress').style.width=Math.round((p||0)*100)+'%';
-    });
+    };
     scanLabel='Lese Etikett …';
     $('#scanStatus').textContent=scanLabel;
     const dbg=[];
-    const {data} = await worker.recognize(canvas);
-    const text=data.text;
-    dbg.push({pass:'Durchlauf 1 (Graustufen)',text});
+    const motor = usePaddle() ? 'PaddleOCR' : 'Tesseract';
+    const {text, words} = await recognizeText(canvas, fortschritt);
+    dbg.push({pass:`Durchlauf 1 (${motor})`,text});
     let parsed = parseNutrition(text);
 
     /* Rettungs-Durchläufe, bis das Ergebnis vollständig UND in sich stimmig
@@ -1689,7 +1742,7 @@ async function handleImageFile(file){
        zählen nicht als fehlend — die sind auf EU-Etiketten freiwillig. */
     const missingCore = p => NUTRI_FIELDS.some(f=>f.key!=='fiber' && p.values[f.key]==null);
     const fertig = p => !missingCore(p) && !Object.keys(checkPlausibility(p)).length;
-    const rect = zoomRect(data.words, canvas.width, canvas.height, img.naturalWidth, img.naturalHeight);
+    const rect = zoomRect(words, canvas.width, canvas.height, img.naturalWidth, img.naturalHeight);
     let zoomCanvas=null;
     const zoomBild = ()=> zoomCanvas || (zoomCanvas = prepCanvas(img, rect, Math.min(1700, Math.round(rect.w*2.2))));
 
@@ -1702,7 +1755,7 @@ async function handleImageFile(file){
       $('#scanStatus').textContent=scanLabel;
       $('#scanProgress').style.width='0%';
       try{
-        const {data:{text:t}} = await worker.recognize(mkCanvas());
+        const {text:t} = await recognizeText(mkCanvas(), fortschritt);
         dbg.push({pass:name,text:t});
         const p2=parseNutrition(t);
         const besser=scoreParsed(p2)>scoreParsed(parsed);
@@ -1713,16 +1766,20 @@ async function handleImageFile(file){
 
     if(rect) await versuch('Tabelle heranzoomen …', ()=>zoomBild(),
       `Zoom auf die Tabelle (${Math.round(rect.anteil*100)} % des Bildes)`);
-    if(rect) await versuch('Zoom, helle Schrift …', ()=>adaptiveBinarize(zoomBild(),true),
-      'Zoom, helle Schrift');
-    await versuch('Schwer zu lesen — zweiter Versuch …', ()=>adaptiveBinarize(canvas),
-      'Vollbild binarisiert');
-    await versuch('Helle Schrift? — noch ein Versuch …', ()=>adaptiveBinarize(canvas,true),
-      'Vollbild, helle Schrift');
+    // Die Binarisierungs-Durchläufe sind Krücken für Tesseract. PaddleOCR ist
+    // auf natürliche Fotos trainiert und wird davon eher schlechter.
+    if(!usePaddle()){
+      if(rect) await versuch('Zoom, helle Schrift …', ()=>adaptiveBinarize(zoomBild(),true),
+        'Zoom, helle Schrift');
+      await versuch('Schwer zu lesen — zweiter Versuch …', ()=>adaptiveBinarize(canvas),
+        'Vollbild binarisiert');
+      await versuch('Helle Schrift? — noch ein Versuch …', ()=>adaptiveBinarize(canvas,true),
+        'Vollbild, helle Schrift');
+    }
 
     parsed.unsure = checkPlausibility(parsed);
     $('#ocrDebug').open=false;
-    $('#ocrDebugText').textContent = `Bild: ${img.naturalWidth}×${img.naturalHeight}px, Arbeitsgröße ${canvas.width}×${canvas.height}px\n\n`+
+    $('#ocrDebugText').textContent = `Motor: ${motor} · Bild: ${img.naturalWidth}×${img.naturalHeight}px, Arbeitsgröße ${canvas.width}×${canvas.height}px\n\n`+
       dbg.map(d=>`── ${d.pass} ──\n${(d.text||'').trim()||'(nichts erkannt)'}`).join('\n\n');
     showScanResult(parsed);
   }catch(err){
