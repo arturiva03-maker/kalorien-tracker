@@ -132,18 +132,35 @@ nav .dot{width:5px;height:5px;border-radius:99px;background:var(--coral);opacity
   z-index:50;opacity:0;pointer-events:none;transition:opacity .25s;
 }
 .backdrop.open{opacity:1;pointer-events:auto}
+/* --kb = Höhe der eingeblendeten Bildschirmtastatur, aus visualViewport.
+   Ohne das schiebt iOS die Tastatur über das Sheet, statt es anzuheben. */
 .sheet{
-  position:fixed;left:0;right:0;bottom:0;z-index:60;transform:translateY(105%);
+  position:fixed;left:0;right:0;bottom:var(--kb,0px);z-index:60;transform:translateY(105%);
   transition:transform .32s cubic-bezier(.2,.9,.25,1);
   display:flex;justify-content:center;pointer-events:none;
 }
 .sheet.open{transform:translateY(0);pointer-events:auto}
+.sheet.dragging{transition:none}
 .sheet-inner{
   width:100%;max-width:480px;background:var(--paper);border:2px solid var(--ink);border-bottom:none;
   border-radius:24px 24px 0 0;padding:10px 20px calc(22px + env(safe-area-inset-bottom));
-  max-height:88dvh;overflow-y:auto;
+  /* 88dvh minus Tastatur. Android verkleinert dvh bei offener Tastatur selbst
+     (--kb bleibt dann 0), iOS nicht — dort trägt --kb die Höhe bei. */
+  max-height:calc(88dvh - var(--kb, 0px));overflow-y:auto;
+  overscroll-behavior:contain;   /* kein Durchscrollen auf die Seite dahinter */
 }
-.grabber{width:44px;height:5px;border-radius:99px;background:var(--hair);margin:4px auto 12px}
+/* Der Griff sah bisher nur nach Ziehen aus. Jetzt ist er es auch — das
+   ::after vergrößert die Trefferfläche auf gut daumengroß. */
+.grabber{
+  width:44px;height:5px;border-radius:99px;background:var(--hair);
+  margin:4px auto 12px;position:relative;cursor:grab;touch-action:none;
+}
+.grabber::after{content:'';position:absolute;inset:-14px -90px}
+.grabber:active{cursor:grabbing;background:var(--muted)}
+
+/* Seite hinter dem Sheet festhalten. position:fixed statt overflow:hidden,
+   weil iOS sonst die Scrollposition verliert. */
+body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .sheet h3{font-family:var(--serif);font-weight:900;font-size:1.3rem;margin-bottom:2px}
 .sheet .sub{font-size:.8rem;color:var(--muted);margin-bottom:14px}
 
@@ -546,18 +563,93 @@ function dateLabel(ds){
 }
 
 /* ═══════════ Sheets ═══════════ */
-let openSheetEl=null;
+let openSheetEl=null, savedScroll=0;
+
 function openSheet(id){
-  closeSheet();
-  openSheetEl=$('#'+id);
-  openSheetEl.classList.add('open');
+  const el=$('#'+id);
+  if(openSheetEl===el) return;              // schon offen: nicht neu animieren
+  if(openSheetEl) openSheetEl.classList.remove('open');
+  else {                                    // erstes Sheet: Seite dahinter festhalten
+    savedScroll=window.scrollY;
+    document.body.style.top=`-${savedScroll}px`;
+    document.body.classList.add('sheet-open');
+  }
+  openSheetEl=el;
+  el.style.transform='';
+  el.classList.add('open');
   $('#backdrop').classList.add('open');
 }
+
 function closeSheet(){
-  if(openSheetEl){ openSheetEl.classList.remove('open'); openSheetEl=null; }
+  if(!openSheetEl) return;
+  openSheetEl.classList.remove('open');
+  openSheetEl.style.transform='';
+  openSheetEl=null;
   $('#backdrop').classList.remove('open');
+  document.body.classList.remove('sheet-open');
+  document.body.style.top='';
+  window.scrollTo(0, savedScroll);
+  if(document.activeElement && document.activeElement.blur) document.activeElement.blur();
 }
+
 $('#backdrop').addEventListener('click', closeSheet);
+document.addEventListener('keydown', e=>{ if(e.key==='Escape') closeSheet(); });
+
+/* ── Sheet nach unten wegziehen ──────────────────────
+   Der Griff signalisiert seit jeher, dass man ziehen kann — bisher
+   passierte nichts. Ab 90 px oder einem schnellen Wisch schließt es. */
+$$('.sheet').forEach(sheet=>{
+  const grab=sheet.querySelector('.grabber');
+  if(!grab) return;
+  let startY=0, startT=0, dy=0, dragging=false;
+
+  grab.addEventListener('pointerdown', e=>{
+    // Date.now() statt e.timeStamp: manche Browser vergröbern Event-
+    // Zeitstempel zum Schutz vor Fingerprinting, teils auf ganze Sekunden
+    dragging=true; startY=e.clientY; startT=Date.now(); dy=0;
+    sheet.classList.add('dragging');
+    try{ grab.setPointerCapture(e.pointerId); }catch{}   // nicht kritisch
+  });
+  grab.addEventListener('pointermove', e=>{
+    if(!dragging) return;
+    dy=Math.max(0, e.clientY-startY);
+    sheet.style.transform=`translateY(${dy}px)`;
+  });
+  const end=()=>{
+    if(!dragging) return;
+    dragging=false;
+    sheet.classList.remove('dragging');
+    sheet.style.transform='';
+    const schnell = dy>25 && (Date.now()-startT) < 300;
+    if(dy>90 || schnell) closeSheet();
+  };
+  grab.addEventListener('pointerup', end);
+  grab.addEventListener('pointercancel', end);
+});
+
+/* ── Bildschirmtastatur ──────────────────────────────
+   Auf iOS schrumpft window.innerHeight nicht, wenn die Tastatur
+   aufgeht — das Sheet läge darunter. visualViewport liefert die
+   echte sichtbare Höhe; die Differenz ist die Tastaturhöhe. */
+(function trackViewport(){
+  const root=document.documentElement, vv=window.visualViewport;
+  const apply=()=>{
+    if(!vv || !vv.height || !window.innerHeight){ root.style.setProperty('--kb','0px'); return; }
+    const kb = window.innerHeight - vv.height - vv.offsetTop;
+    root.style.setProperty('--kb', (kb>60 ? kb : 0)+'px');   // <60px = Browserleiste, keine Tastatur
+  };
+  apply();
+  if(vv){ vv.addEventListener('resize',apply); vv.addEventListener('scroll',apply); }
+  window.addEventListener('orientationchange',()=>setTimeout(apply,200));
+})();
+
+/* Tastatur nicht ungefragt aufspringen lassen: auf Touch-Geräten
+   tippt man das Feld selbst an, am Zeigegerät ist Autofokus bequem. */
+const coarsePointer = matchMedia('(pointer: coarse)').matches;
+function focusSoon(sel, delay=350){
+  if(coarsePointer) return;
+  setTimeout(()=>{ const el=$(sel); if(el) el.focus(); }, delay);
+}
 
 /* ═══════════ Rendering: Heute ═══════════ */
 function todayTotals(){
@@ -725,7 +817,7 @@ $('#btnFind').addEventListener('click',()=>{
   $('#offHint').textContent='Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.';
   renderFoodResults();
   openSheet('sheetSearch');
-  setTimeout(()=>$('#foodSearch').focus(),350);
+  focusSoon('#foodSearch');
 });
 $('#foodSearch').addEventListener('input',()=>{ onlineHits=[]; renderFoodResults(); });
 
@@ -900,7 +992,7 @@ $('#btnEntEdit').addEventListener('click',()=>{
              value="${f.key==='kcal' ? Math.round(e.kcal||0) : r1(e[f.key]||0)}">
     </div>`).join('');
   showEntryMode('edit');
-  setTimeout(()=>$('#eGrams').focus(),50);
+  focusSoon('#eGrams',50);
 });
 
 $('#eGrams').addEventListener('input',()=>{
@@ -951,7 +1043,7 @@ function openPortion(idOrProduct){
   $('#portGrams').value='';
   $('#portKcal').textContent='–';
   openSheet('sheetPortion');
-  setTimeout(()=>$('#portGrams').focus(),350);
+  focusSoon('#portGrams');
 }
 $('#portGrams').addEventListener('input',()=>{
   const g=parseFloat($('#portGrams').value);
@@ -1015,7 +1107,7 @@ $('#btnManual').addEventListener('click',()=>{
   ['mName','mKcal','mGrams','mFat','mCarbs','mSugar','mProtein'].forEach(id=>$('#'+id).value='');
   setToggle('mSaveProd',false); $('#mSaveHint').textContent='';
   openSheet('sheetManual');
-  setTimeout(()=>$('#mName').focus(),350);
+  focusSoon('#mName');
 });
 $('#btnManualAdd').addEventListener('click',()=>{
   const name=$('#mName').value.trim();

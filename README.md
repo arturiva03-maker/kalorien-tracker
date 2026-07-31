@@ -17,6 +17,22 @@ Simpler Kalorientracker: **Nährwerttabelle abfotografieren → Werte werden erk
 - Beim allerersten Scan lädt die Texterkennung einmalig ~10 MB Sprachdaten (wird gecacht).
 - Etikett möglichst formatfüllend, gerade und bei gutem Licht fotografieren; nicht erkannte Felder sind rot markiert und lassen sich von Hand korrigieren.
 
+## Sheets & Tastatur (mobil)
+
+Die aufklappenden Sheets schließen per Wisch am Griff (ab 90 px oder einem
+schnellen kurzen Wisch), per Tipp auf den Hintergrund oder mit Escape. Solange
+eines offen ist, wird die Seite dahinter festgehalten — `position:fixed` mit
+gemerkter Scrollposition, weil iOS bei `overflow:hidden` nach oben springt.
+
+Die Höhe der Bildschirmtastatur kommt aus `visualViewport` und landet in der
+CSS-Variablen `--kb`; das Sheet sitzt auf `bottom:var(--kb)` und schrumpft
+entsprechend. Nötig ist das für iOS, wo `window.innerHeight` bei offener
+Tastatur unverändert bleibt und das Sheet sonst darunter verschwindet. Android
+verkleinert den Viewport selbst, dort bleibt `--kb` bei 0.
+
+Autofokus gibt es nur auf Geräten mit `pointer: fine`. Auf dem Handy würde
+sonst bei jedem Öffnen ungefragt die Tastatur hochspringen.
+
 ## Lebensmittel-Datenbank
 
 `foods.js` enthält rund 420 Einträge in 18 Kategorien, als kompakte Arrays:
