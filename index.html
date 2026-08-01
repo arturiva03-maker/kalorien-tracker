@@ -402,7 +402,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
       </div>
       <div class="nutri-grid" id="nutriInputs"></div>
       <div class="hint" id="ocrHint"></div>
-      <div class="portion-row">
+      <div class="portion-row" id="scanPortionRow">
         <div class="field" style="margin:0">
           <label>Portion (<span id="portionUnit">g</span>)</label>
           <input type="number" id="pPortion" inputmode="decimal" placeholder="z. B. 150">
@@ -514,7 +514,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
     <div class="sub" id="portInfo"></div>
     <div class="portion-row" style="margin-top:6px">
       <div class="field" style="margin:0">
-        <label>Portion (<span id="portUnit2">g</span>)</label>
+        <label id="portLabel">Portion (g)</label>
         <input type="number" id="portGrams" inputmode="decimal" placeholder="z. B. 150">
       </div>
       <div class="live-kcal"><small>macht</small><span id="portKcal">–</span></div>
@@ -598,6 +598,14 @@ const save = (k,v)=> localStorage.setItem(k, JSON.stringify(v));
 let entries  = load(LS.entries, []);      // {id,date,name,grams,kcal,fat,carbs,sugar,protein}
 let products = load(LS.products, []);     // {id,name,basis:'g'|'ml',per100:{kcal,fat,satfat,carbs,sugar,fiber,protein,salt}}
 let settings = load(LS.settings, {goal:2000});
+
+/* Produkte gibt es in zwei Formen: mit Bezugsgröße (Werte pro 100 g/ml, für
+   alles mit Etikett) und pauschal (per100 hält dann die Werte EINER Portion —
+   für Selbstgekochtes, wo niemand die Gramm kennt). */
+const istPauschal = p => !!(p && p.pauschal);
+const produktEinheit = p => istPauschal(p) ? 'Portion' : '100 '+p.basis;
+const gleichesProdukt = (a,b) => a.name.toLowerCase()===b.name.toLowerCase()
+  && istPauschal(a)===istPauschal(b) && (istPauschal(a) || a.basis===b.basis);
 
 const NUTRI_FIELDS = [
   {key:'kcal',    label:'Energie (kcal)'},
@@ -822,7 +830,7 @@ function renderProducts(){
   wrap.innerHTML = `<div class="entry-list">` + list.map(p=>`
     <div class="entry prod" data-prod="${p.id}">
       <div class="e-name"><b>${esc(p.name)}</b><span>F ${fmt1(p.per100.fat)} · KH ${fmt1(p.per100.carbs)} · E ${fmt1(p.per100.protein)}</span></div>
-      <span class="per100-badge">${fmt(p.per100.kcal)} kcal / 100 ${p.basis}</span>
+      <span class="per100-badge">${fmt(p.per100.kcal)} kcal / ${produktEinheit(p)}</span>
     </div>`).join('') + `</div>`;
   wrap.querySelectorAll('[data-prod]').forEach(el=>el.addEventListener('click',()=>openPortion(el.dataset.prod)));
 }
@@ -1028,11 +1036,13 @@ function openEntry(id){
   $('#entGrams').value='';
   $('#entGramsWrap').classList.toggle('hidden', !!g);
 
-  const dupe = products.some(p=>p.name.toLowerCase()===e.name.toLowerCase() && p.basis===unit);
+  const dupe = products.some(p=>p.name.toLowerCase()===e.name.toLowerCase()
+    && (g ? (!istPauschal(p) && p.basis===unit) : istPauschal(p)));
   $('#entHint').innerHTML = dupe
     ? `„${esc(e.name)}" liegt schon in deinen Produkten.`
     : g ? 'Wird mit den Werten pro 100 '+unit+' gespeichert.'
-        : `<b>Menge fehlt</b> — ohne sie lässt sich nicht auf 100 ${unit} umrechnen.`;
+        : `Wird als <b>ganze Portion</b> gespeichert — mit genau diesen Werten, ohne Gramm.
+           Für Werte pro 100 ${unit} trag oben die Menge ein.`;
 
   showEntryMode('view');
   openSheet('sheetEntry');
@@ -1041,23 +1051,28 @@ function showEntryMode(mode){
   $('#entView').classList.toggle('hidden', mode!=='view');
   $('#entEdit').classList.toggle('hidden', mode!=='edit');
 }
+/* Ohne Mengenangabe wird das Produkt pauschal gespeichert: eine Portion mit
+   genau diesen Werten. Mit Menge wie bisher auf 100 g/ml umgerechnet. */
 $('#btnEntToProd').addEventListener('click',()=>{
   const e=entryDetail; if(!e) return;
   const unit=e.unit||'g';
   const g = e.grams>0 ? e.grams : (parseFloat($('#entGrams').value)||0);
-  if(!(g>0)){ toast('Menge fehlt fürs Produkt'); $('#entGrams').focus(); return; }
   if(!(e.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
-  if(products.some(p=>p.name.toLowerCase()===e.name.toLowerCase() && p.basis===unit)){
+  const k = g>0 ? 100/g : 1;
+  const neu = {
+    id:uid(), name:e.name,
+    ...(g>0 ? {basis:unit} : {pauschal:true, basis:'Portion'}),
+    per100:{
+      kcal:Math.round((e.kcal||0)*k), fat:(e.fat||0)*k, satfat:(e.satfat||0)*k,
+      carbs:(e.carbs||0)*k, sugar:(e.sugar||0)*k, fiber:(e.fiber||0)*k,
+      protein:(e.protein||0)*k, salt:(e.salt||0)*k,
+    }};
+  if(products.some(p=>gleichesProdukt(p,neu))){
     toast(`„${e.name}" ist schon in Produkten`); return;
   }
-  const k=100/g;
-  products.push({id:uid(), name:e.name, basis:unit, per100:{
-    kcal:Math.round((e.kcal||0)*k), fat:(e.fat||0)*k, satfat:(e.satfat||0)*k,
-    carbs:(e.carbs||0)*k, sugar:(e.sugar||0)*k, fiber:(e.fiber||0)*k,
-    protein:(e.protein||0)*k, salt:(e.salt||0)*k,
-  }});
+  products.push(neu);
   save(LS.products,products); renderProducts(); closeSheet();
-  toast(`${e.name} in Produkte gespeichert ✓`);
+  toast(g>0 ? `${e.name} in Produkte gespeichert ✓` : `${e.name} als Portion gespeichert ✓`);
 });
 $('#btnEntDelete').addEventListener('click',()=>{
   if(!entryDetail) return;
@@ -1140,25 +1155,31 @@ function openPortion(idOrProduct){
   $('#btnPortDelete').classList.toggle('hidden', !fromLibrary);
   $('#portSaveProd').classList.toggle('hidden', fromLibrary);
   setToggle('portSaveProd', false);
+  const pausch=istPauschal(portionProduct);
   $('#portName').textContent = portionProduct.name;
-  $('#portInfo').textContent = `${fmt(portionProduct.per100.kcal)} kcal pro 100 ${portionProduct.basis}`;
-  $('#portUnit2').textContent = portionProduct.basis;
-  $('#portGrams').value='';
-  $('#portKcal').textContent='–';
+  $('#portInfo').textContent = `${fmt(portionProduct.per100.kcal)} kcal pro ${produktEinheit(portionProduct)}`;
+  // Pauschal: nach der Anzahl Portionen fragen, mit 1 vorbelegt — meist reicht Eintragen
+  $('#portLabel').textContent = pausch ? 'Portionen' : `Portion (${portionProduct.basis})`;
+  $('#portGrams').value = pausch ? '1' : '';
+  $('#portGrams').placeholder = pausch ? '1' : 'z. B. 150';
+  $('#portKcal').textContent = pausch ? fmt(portionProduct.per100.kcal)+' kcal' : '–';
   openSheet('sheetPortion');
   focusSoon('#portGrams');
 }
+/* Faktor auf die gespeicherten Werte: pauschal = Anzahl Portionen, sonst g/100 */
+const portionFaktor = (p,menge)=> istPauschal(p) ? menge : menge/100;
 $('#portGrams').addEventListener('input',()=>{
   const g=parseFloat($('#portGrams').value);
-  $('#portKcal').textContent = g>0 ? fmt(portionProduct.per100.kcal*g/100)+' kcal' : '–';
+  $('#portKcal').textContent = g>0
+    ? fmt(portionProduct.per100.kcal*portionFaktor(portionProduct,g))+' kcal' : '–';
 });
 $('#btnPortAdd').addEventListener('click',()=>{
   const g=parseFloat($('#portGrams').value);
-  if(!(g>0)) { toast('Portionsgröße fehlt'); return; }
+  if(!(g>0)) { toast(istPauschal(portionProduct)?'Anzahl Portionen fehlt':'Portionsgröße fehlt'); return; }
   const p=portionProduct;
   const keep = !$('#portSaveProd').classList.contains('hidden') && toggleOn('portSaveProd');
-  if(keep && !products.some(x=>x.name.toLowerCase()===p.name.toLowerCase() && x.basis===p.basis)){
-    products.push({id:uid(), name:p.name, basis:p.basis, per100:{...p.per100}});
+  if(keep && !products.some(x=>gleichesProdukt(x,p))){
+    products.push({id:uid(), name:p.name, basis:p.basis, pauschal:istPauschal(p), per100:{...p.per100}});
     save(LS.products,products); renderProducts();
   }
   addEntryFromProduct(p, g);
@@ -1171,11 +1192,17 @@ $('#btnPortAdd').addEventListener('click',()=>{
 $('#btnPortEdit').addEventListener('click',()=>{
   const p=portionProduct; if(!p) return;
   const g=parseFloat($('#portGrams').value);
-  showScanResult({values:{...p.per100}, found:{}, basis:p.basis,
-    portion:(g>0?g:(p.portion??null)), unsure:{}});
+  const pausch=istPauschal(p);
+  showScanResult({values:{...p.per100}, found:{}, basis:pausch?'g':p.basis,
+    portion:(pausch?null:(g>0?g:(p.portion??null))), unsure:{}});
   scanEditId = portionFromLibrary ? p.id : null;
+  scanEditPauschal = pausch;
   $('#pName').value = p.name;
   $('#pSaveProd').classList.toggle('hidden', !!scanEditId);
+  // Pauschal: keine Bezugsgröße und keine Portionsangabe — die Werte sind die Portion
+  $('#basisSeg').classList.toggle('hidden', pausch);
+  $('#scanPortionRow').classList.toggle('hidden', pausch);
+  if(pausch) $('#basisLabel').textContent='Portion';
   $('#ocrHint').textContent = scanEditId
     ? 'Änderungen überschreiben das gespeicherte Produkt.'
     : 'Werte aus der Datenbank — hier anpassen, falls etwas nicht stimmt.';
@@ -1187,10 +1214,13 @@ $('#btnPortDelete').addEventListener('click',()=>{
   products = products.filter(p=>p.id!==portionProduct.id);
   save(LS.products,products); renderProducts(); closeSheet(); toast('Produkt gelöscht');
 });
-function addEntryFromProduct(p, grams){
-  const f=p.per100, k=grams/100;
+function addEntryFromProduct(p, menge){
+  const f=p.per100, k=portionFaktor(p,menge);
+  const pausch=istPauschal(p);
   entries.push({
-    id:uid(), date:todayStr(), name:p.name, grams, unit:p.basis,
+    id:uid(), date:todayStr(), name:p.name,
+    // Pauschal-Einträge haben keine Grammangabe — die Werte gelten so, wie sie sind
+    grams: pausch ? null : menge, unit: pausch ? null : p.basis,
     kcal:Math.round((f.kcal||0)*k), fat:(f.fat||0)*k, satfat:(f.satfat||0)*k,
     carbs:(f.carbs||0)*k, sugar:(f.sugar||0)*k, fiber:(f.fiber||0)*k,
     protein:(f.protein||0)*k, salt:(f.salt||0)*k,
@@ -1494,7 +1524,7 @@ $('#btnBarcodeLookup').addEventListener('click',()=>{
 });
 
 /* ═══════════ OCR: Scan-Flow ═══════════ */
-let ocrWorker=null, scanParsed=null, scanEditId=null;
+let ocrWorker=null, scanParsed=null, scanEditId=null, scanEditPauschal=false;
 $('#btnScan').addEventListener('click',()=>$('#camInput').click());
 $('#camInput').addEventListener('change',e=>{
   const f=e.target.files[0];
@@ -1895,9 +1925,12 @@ function scoreParsed(p){
 /* ── Scan-Ergebnis anzeigen ── */
 function showScanResult(parsed){
   scanParsed=parsed;
-  // Standardfall: neues Produkt. „Werte anpassen" setzt das danach ggf. um.
-  scanEditId=null;
+  // Standardfall: neues Produkt mit Bezugsgröße. „Werte anpassen" setzt das
+  // danach ggf. um.
+  scanEditId=null; scanEditPauschal=false;
   $('#pSaveProd').classList.remove('hidden');
+  $('#basisSeg').classList.remove('hidden');
+  $('#scanPortionRow').classList.remove('hidden');
   $('#scanStage').classList.add('hidden');
   $('#scanResult').classList.remove('hidden');
   $('#pName').value='';
@@ -1948,6 +1981,7 @@ function updateLiveKcal(){
 }
 function buildProduct(){
   const name=$('#pName').value.trim()||'Gescanntes Produkt';
+  if(scanEditPauschal) return {id:uid(), name, pauschal:true, basis:'Portion', per100:currentPer100()};
   const basis=$('#basisSeg .on').dataset.basis;
   return {id:uid(), name, basis, per100:currentPer100()};
 }
@@ -1956,12 +1990,13 @@ function applyScanEdit(p){
   if(!scanEditId) return false;
   const alt=products.find(x=>x.id===scanEditId);
   if(!alt) return false;
-  alt.name=p.name; alt.basis=p.basis; alt.per100=p.per100;
+  alt.name=p.name; alt.basis=p.basis; alt.per100=p.per100; alt.pauschal=istPauschal(p);
   save(LS.products,products); renderProducts();
   return true;
 }
 $('#btnScanAdd').addEventListener('click',()=>{
-  const g=parseFloat($('#pPortion').value);
+  // Pauschal-Produkte haben keine Portionsgröße — eingetragen wird eine Portion
+  const g = scanEditPauschal ? 1 : parseFloat($('#pPortion').value);
   if(!(g>0)){ toast('Portionsgröße fehlt'); $('#pPortion').focus(); return; }
   const p=buildProduct();
   if(!(p.per100.kcal>0)){ toast('Energie (kcal) fehlt'); return; }
