@@ -1034,10 +1034,204 @@ async function searchOnline(){
 $('#btnOnlineSearch').addEventListener('click', searchOnline);
 
 /* ═══════════ Tag teilen ═══════════
-   Ein Tag als Klartext, wie man ihn in einen Chat schickt. Kein Bild, keine
-   Datei: Text kommt überall an und lässt sich am anderen Ende noch lesen.
-   navigator.share gibt es nur im sicheren Kontext und nur auf eine Geste hin
-   — fehlt es oder scheitert es, landet derselbe Text in der Zwischenablage. */
+   Geteilt wird ein Bild: dieselbe Etiketten-Karte wie in der App, gezeichnet
+   statt abfotografiert. Kein html2canvas — die Karte ist ein paar Rechtecke
+   und Zeilen, und ein eigenes Bild hängt nicht davon ab, was gerade auf dem
+   Bildschirm steht oder wie breit das Gerät ist.
+   Der Text unten bleibt als Rückfall, wenn Dateien nicht teilbar sind. */
+
+const SHARE_W = 540;          // logische Breite, am Ende mal 2 für die Schärfe
+const SHARE_SCALE = 2;
+const SHARE_MAX_ENTRIES = 14; // darüber wird das Bild zur Tapete
+
+function roundRectPath(c,x,y,w,h,r){
+  c.beginPath();
+  if(c.roundRect){ c.roundRect(x,y,w,h,r); return; }
+  c.moveTo(x+r,y);
+  c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r);
+  c.arcTo(x,y+h,x,y,r);     c.arcTo(x,y,x+w,y,r);
+  c.closePath();
+}
+/* Lange Produktnamen abschneiden statt über den Rand laufen lassen */
+function kuerzen(c,s,maxW){
+  if(c.measureText(s).width<=maxW) return s;
+  let t=s;
+  while(t.length>1 && c.measureText(t+'…').width>maxW) t=t.slice(0,-1);
+  return t+'…';
+}
+
+const SHARE_FARBEN = {
+  paper:'#F6F1E7', card:'#FFFDF8', ink:'#17150F',
+  hair:'#E3DCCC', muted:'#8B8577', green:'#2E6B4E', coral:'#E4572E',
+};
+const SANS='-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif';
+const SERIF='Fraunces,Georgia,serif';
+
+/* Zeichnet den Inhalt ab y0 und gibt zurück, wo er aufhört — die Kartenhöhe
+   steht damit erst nach dem Zeichnen fest, deshalb zwei Ebenen. */
+function dayCardContent(c, ds, x, y, w){
+  const F=SHARE_FARBEN;
+  const t=dayTotals(ds), goal=settings.goal||2000;
+  const alle=entries.filter(e=>e.date===ds).reverse();
+  const liste=alle.slice(0, SHARE_MAX_ENTRIES);
+  const weitere=alle.length-liste.length;
+  const drueber=t.kcal>goal;
+  const pct=Math.min(100, t.kcal/goal*100);
+
+  const setLS=v=>{ try{ c.letterSpacing=v; }catch{} };   // nicht überall vorhanden
+  c.textBaseline='alphabetic';
+
+  // Wortmarke + Datum
+  c.fillStyle=F.ink; c.font=`italic 700 32px ${SERIF}`;
+  c.fillText('Brennwert', x, y+26);
+  const wm=c.measureText('Brennwert').width;
+  c.fillStyle=F.coral; c.font=`700 22px ${SERIF}`;
+  c.fillText('*', x+wm+2, y+22);
+  y+=44;
+
+  c.fillStyle=F.muted; c.font=`700 12px ${SANS}`; setLS('1.6px');
+  c.fillText(new Date(ds+'T12:00:00')
+    .toLocaleDateString('de-DE',{weekday:'long',day:'numeric',month:'long',year:'numeric'})
+    .toUpperCase(), x, y);
+  setLS('0px');
+  y+=18;
+
+  c.fillStyle=F.ink; c.fillRect(x, y, w, 7);
+  // Grundlinie so weit unter die Regel, dass die Versalhöhe der 62px-Ziffern
+  // (~44px) darunter Platz hat statt hineinzulaufen
+  y+=7+58;
+
+  // Große Zahl, rechts daneben Ziel und Rest
+  c.fillStyle = drueber ? F.coral : F.ink;
+  c.font=`900 62px ${SERIF}`;
+  c.fillText(fmt(t.kcal), x, y);
+  // „von 2.000 kcal“ in drei Teilen, damit die Zahl kräftiger steht als der Rest
+  const p1='von ', p2=fmt(goal), p3=' kcal';
+  c.font=`400 14px ${SANS}`;
+  const w1=c.measureText(p1).width, w3=c.measureText(p3).width;
+  c.font=`700 14px ${SANS}`;
+  const w2=c.measureText(p2).width;
+  let rx=x+w-(w1+w2+w3);
+  c.fillStyle=F.muted; c.font=`400 14px ${SANS}`; c.fillText(p1,rx,y-20); rx+=w1;
+  c.fillStyle=F.ink;   c.font=`700 14px ${SANS}`; c.fillText(p2,rx,y-20); rx+=w2;
+  c.fillStyle=F.muted; c.font=`400 14px ${SANS}`; c.fillText(p3,rx,y-20);
+  c.textAlign='right';
+  c.fillText(drueber ? `${fmt(t.kcal-goal)} drüber` : `${fmt(goal-t.kcal)} übrig`, x+w, y-2);
+  c.textAlign='left';
+  y+=20;
+
+  // Budget-Balken
+  const bh=18;
+  c.fillStyle=F.card; roundRectPath(c,x,y,w,bh,bh/2); c.fill();
+  if(pct>0){
+    const bw=Math.max(bh, w*pct/100);
+    c.fillStyle = drueber ? F.coral : F.green;
+    roundRectPath(c,x,y,bw,bh,bh/2); c.fill();
+  }
+  c.strokeStyle=F.ink; c.lineWidth=2.5;
+  roundRectPath(c,x+1.25,y+1.25,w-2.5,bh-2.5,bh/2); c.stroke();
+  y+=bh+11;
+
+  c.fillStyle=F.muted; c.font=`400 12px ${SANS}`; setLS('1.2px');
+  c.fillText((drueber ? 'Ziel überschritten' : Math.round(pct)+' % des Tagesziels').toUpperCase(), x, y);
+  setLS('0px');
+  y+=18;
+
+  // Nährwerttabelle
+  c.fillStyle=F.ink; c.fillRect(x,y,w,4); y+=4;
+  const zeilen=[
+    ['Fett', fmt1(t.fat)+' g', false],
+    ['davon gesättigt', fmt1(t.satfat)+' g', true],
+    ['Kohlenhydrate', fmt1(t.carbs)+' g', false],
+    ['davon Zucker', fmt1(t.sugar)+' g', true],
+    ['Eiweiß', fmt1(t.protein)+' g', false],
+    ['Salz', fmt1(t.salt)+' g', false],
+  ];
+  zeilen.forEach(([k,v,eingerueckt],i)=>{
+    const zh=31, mitte=y+zh/2+5;
+    c.font=`400 15px ${SANS}`; c.fillStyle = eingerueckt ? F.muted : F.ink;
+    c.fillText(k, x+(eingerueckt?16:0), mitte);
+    c.font=`600 15px ${SANS}`; c.fillStyle=F.ink; c.textAlign='right';
+    c.fillText(v, x+w, mitte); c.textAlign='left';
+    if(i<zeilen.length-1){ c.fillStyle=F.hair; c.fillRect(x,y+zh,w,1); }
+    y+=zh;
+  });
+
+  // Was gegessen wurde
+  if(liste.length){
+    y+=26;
+    c.fillStyle=F.muted; c.font=`700 12px ${SANS}`; setLS('1.9px');
+    c.fillText('GEGESSEN', x, y); setLS('0px');
+    y+=14;
+    liste.forEach((e,i)=>{
+      const zh = e.grams ? 50 : 42;
+      const kcalTxt=fmt(e.kcal);
+      c.font=`700 17px ${SERIF}`; const kb=c.measureText(kcalTxt).width;
+      c.font=`400 11px ${SANS}`;  const eb=c.measureText(' kcal').width;
+      const platz=w-kb-eb-14;
+
+      c.font=`600 15px ${SANS}`; c.fillStyle=F.ink;
+      c.fillText(kuerzen(c, e.name, platz), x, y+(e.grams?20:26));
+      if(e.grams){
+        c.font=`400 12px ${SANS}`; c.fillStyle=F.muted;
+        c.fillText(`${fmt(e.grams)} ${e.unit||'g'}`, x, y+36);
+      }
+      c.textAlign='right';
+      c.fillStyle=F.muted; c.font=`400 11px ${SANS}`;
+      c.fillText(' kcal', x+w, y+zh/2+5);
+      c.fillStyle=F.ink; c.font=`700 17px ${SERIF}`;
+      c.fillText(kcalTxt, x+w-eb, y+zh/2+5);
+      c.textAlign='left';
+
+      if(i<liste.length-1 || weitere>0){ c.fillStyle=F.hair; c.fillRect(x,y+zh,w,1); }
+      y+=zh;
+    });
+    if(weitere>0){
+      c.fillStyle=F.muted; c.font=`400 13px ${SANS}`;
+      c.fillText(`und ${fmt(weitere)} weitere`, x, y+26);
+      y+=34;
+    }
+  }
+  return y;
+}
+
+async function dayShareBlob(ds){
+  // Ohne geladene Schrift zeichnet Canvas stumm die Ersatzschrift
+  try{
+    await document.fonts.ready;
+    await Promise.all([`900 62px ${SERIF}`,`italic 700 32px ${SERIF}`,`700 17px ${SERIF}`]
+      .map(f=>document.fonts.load(f)));
+  }catch{}
+
+  const F=SHARE_FARBEN, W=SHARE_W, rand=20, pad=28;
+  const kx=rand, kw=W-rand*2, ix=kx+pad, iw=kw-pad*2, iy=rand+pad;
+
+  // 1. Durchgang: Inhalt auf eine hohe, durchsichtige Ebene — danach steht fest,
+  //    wie hoch die Karte werden muss.
+  const ebene=document.createElement('canvas');
+  ebene.width=W*SHARE_SCALE; ebene.height=2600*SHARE_SCALE;
+  const ec=ebene.getContext('2d'); ec.scale(SHARE_SCALE,SHARE_SCALE);
+  const yEnde=dayCardContent(ec, ds, ix, iy, iw);
+
+  const kh=yEnde-rand+pad;
+  const H=rand+kh+8+rand;   // 8 = Schattenversatz
+
+  const cv=document.createElement('canvas');
+  cv.width=W*SHARE_SCALE; cv.height=H*SHARE_SCALE;
+  const c=cv.getContext('2d'); c.scale(SHARE_SCALE,SHARE_SCALE);
+
+  c.fillStyle=F.paper; c.fillRect(0,0,W,H);
+  c.fillStyle='rgba(23,21,15,.12)';                 // harter Schatten wie in der App
+  roundRectPath(c,kx+6,rand+7,kw,kh,18); c.fill();
+  c.fillStyle=F.card; roundRectPath(c,kx,rand,kw,kh,18); c.fill();
+  c.strokeStyle=F.ink; c.lineWidth=2.5;
+  roundRectPath(c,kx+1.25,rand+1.25,kw-2.5,kh-2.5,18); c.stroke();
+
+  c.drawImage(ebene, 0,0, W*SHARE_SCALE, H*SHARE_SCALE, 0,0, W, H);
+
+  return new Promise(res=>cv.toBlob(res,'image/png'));
+}
+
 function dayShareText(ds){
   const t=dayTotals(ds), goal=settings.goal||2000;
   const list=entries.filter(e=>e.date===ds);
@@ -1058,15 +1252,36 @@ function dayShareText(ds){
   return zeilen.join('\n');
 }
 
+/* Reihenfolge: Bild teilen — sonst Bild sichern — sonst Text in die
+   Zwischenablage. Ein vom Nutzer abgebrochenes Teilen ist kein Fehler. */
 async function shareDay(ds){
   if(!entries.some(e=>e.date===ds)){
     toast(ds===todayStr() ? 'Heute ist noch nichts eingetragen' : 'An dem Tag ist nichts eingetragen');
     return;
   }
+  const titel=`Brennwert · ${dateLabel(ds)}`;
+  let blob=null;
+  try{ blob=await dayShareBlob(ds); }
+  catch(err){ console.warn('Teilen: Bild fehlgeschlagen', err); }
+
+  if(blob){
+    const datei=new File([blob], `brennwert-${ds}.png`, {type:'image/png'});
+    if(navigator.canShare?.({files:[datei]})){
+      try{ await navigator.share({files:[datei], title:titel}); return; }
+      catch(err){ if(err && err.name==='AbortError') return; }
+    }
+    try{
+      const a=document.createElement('a');
+      a.href=URL.createObjectURL(blob); a.download=datei.name;
+      a.click(); URL.revokeObjectURL(a.href);
+      toast('Bild gesichert ✓'); return;
+    }catch(err){ console.warn('Teilen: Sichern fehlgeschlagen', err); }
+  }
+
   const text=dayShareText(ds);
   if(navigator.share){
-    try{ await navigator.share({title:`Brennwert · ${dateLabel(ds)}`, text}); return; }
-    catch(err){ if(err && err.name==='AbortError') return; }   // abgebrochen ist kein Fehler
+    try{ await navigator.share({title:titel, text}); return; }
+    catch(err){ if(err && err.name==='AbortError') return; }
   }
   try{
     await navigator.clipboard.writeText(text);
