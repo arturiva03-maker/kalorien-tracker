@@ -323,13 +323,9 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"/><circle cx="12" cy="13" r="4"/></svg>
         Etikett fotografieren
       </button>
-      <button class="btn btn-ghost" id="btnFind">
+      <button class="btn btn-ghost btn-wide" id="btnAdd">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
-        Suchen
-      </button>
-      <button class="btn btn-ghost" id="btnManual">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 20h9"/><path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"/></svg>
-        Manuell
+        Suchen oder eintragen
       </button>
     </div>
 
@@ -425,47 +421,51 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
   </div>
 </div>
 
-<div class="sheet" id="sheetManual">
-  <div class="sheet-inner">
-    <div class="grabber"></div>
-    <h3>Manuell eintragen</h3>
-    <div class="sub">Für alles ohne Etikett — Restaurant, Obst, Selbstgekochtes.</div>
-    <div class="field">
-      <label>Was?</label>
-      <input type="text" id="mName" placeholder="z. B. Banane">
-    </div>
-    <div class="nutri-grid">
-      <div class="field"><label>Kalorien (kcal)</label><input type="number" id="mKcal" inputmode="decimal" placeholder="105"></div>
-      <div class="field"><label>Menge (g, optional)</label><input type="number" id="mGrams" inputmode="decimal" placeholder="120"></div>
-      <div class="field"><label>Fett (g, optional)</label><input type="number" id="mFat" inputmode="decimal"></div>
-      <div class="field"><label>Kohlenhydrate (g, opt.)</label><input type="number" id="mCarbs" inputmode="decimal"></div>
-      <div class="field"><label>Zucker (g, optional)</label><input type="number" id="mSugar" inputmode="decimal"></div>
-      <div class="field"><label>Eiweiß (g, optional)</label><input type="number" id="mProtein" inputmode="decimal"></div>
-    </div>
-    <button class="save-toggle" id="mSaveProd" aria-pressed="false">
-      <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
-      In Produkte speichern
-    </button>
-    <div class="hint" id="mSaveHint" style="margin:6px 0 0"></div>
-    <div class="sheet-btns">
-      <button class="btn btn-green btn-block" id="btnManualAdd">Eintragen</button>
-    </div>
-  </div>
-</div>
-
+<!-- Suchen und Manuell teilen sich ein Blatt: wer nichts findet, tippt es
+     eine Umschaltung weiter selbst ein, statt neu anzusetzen. -->
 <div class="sheet" id="sheetSearch">
   <div class="sheet-inner">
     <div class="grabber"></div>
-    <h3>Lebensmittel suchen</h3>
-    <div class="sub"><span id="dbCount">0</span> eingebaute Einträge — sofort, ohne Netz.</div>
-    <div class="field" style="margin-bottom:8px">
-      <input type="search" id="foodSearch" placeholder="z. B. Haferflocken, Gouda, Banane …" autocomplete="off">
+    <h3 id="addTitle">Lebensmittel suchen</h3>
+    <div class="sub" id="addSub">Eingebaute Einträge — sofort, ohne Netz.</div>
+    <div class="seg" id="addSeg">
+      <button data-pane="find" class="on">Suchen</button>
+      <button data-pane="manual">Manuell</button>
     </div>
-    <div class="res-scroll" id="foodResults"></div>
-    <div class="sheet-btns">
-      <button class="btn btn-ghost btn-block" id="btnOnlineSearch">Zusätzlich online suchen</button>
+
+    <div id="paneFind">
+      <div class="field" style="margin-bottom:8px">
+        <input type="search" id="foodSearch" placeholder="z. B. Haferflocken, Gouda, Banane …" autocomplete="off">
+      </div>
+      <div class="res-scroll" id="foodResults"></div>
+      <div class="sheet-btns">
+        <button class="btn btn-ghost btn-block" id="btnOnlineSearch">Zusätzlich online suchen</button>
+      </div>
+      <div class="hint" id="offHint">Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.</div>
     </div>
-    <div class="hint" id="offHint">Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.</div>
+
+    <div id="paneManual" class="hidden">
+      <div class="field">
+        <label>Was?</label>
+        <input type="text" id="mName" placeholder="z. B. Banane">
+      </div>
+      <div class="nutri-grid">
+        <div class="field"><label>Kalorien (kcal)</label><input type="number" id="mKcal" inputmode="decimal" placeholder="105"></div>
+        <div class="field"><label>Menge (g, optional)</label><input type="number" id="mGrams" inputmode="decimal" placeholder="120"></div>
+        <div class="field"><label>Fett (g, optional)</label><input type="number" id="mFat" inputmode="decimal"></div>
+        <div class="field"><label>Kohlenhydrate (g, opt.)</label><input type="number" id="mCarbs" inputmode="decimal"></div>
+        <div class="field"><label>Zucker (g, optional)</label><input type="number" id="mSugar" inputmode="decimal"></div>
+        <div class="field"><label>Eiweiß (g, optional)</label><input type="number" id="mProtein" inputmode="decimal"></div>
+      </div>
+      <button class="save-toggle" id="mSaveProd" aria-pressed="false">
+        <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
+        In Produkte speichern
+      </button>
+      <div class="hint" id="mSaveHint" style="margin:6px 0 0"></div>
+      <div class="sheet-btns">
+        <button class="btn btn-green btn-block" id="btnManualAdd">Eintragen</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -893,22 +893,46 @@ function renderFoodResults(){
   if(onlineHits.length) parts.push(onlineHits.map((f,i)=>row(f,i,true)).join(''));
   wrap.innerHTML = parts.length
     ? `<div class="entry-list">${parts.join('')}</div>`
-    : `<div class="empty" style="padding:22px 18px">Nichts gefunden.<br>Versuch die Online-Suche oder trag es manuell ein.</div>`;
+    : `<div class="empty" style="padding:22px 18px 14px">Nichts gefunden.<br>Versuch die Online-Suche — oder trag es selbst ein.</div>
+       <button class="btn btn-ghost btn-block" id="btnToManual">Stattdessen manuell eintragen</button>`;
   wrap.querySelectorAll('[data-hit]').forEach(el=>el.addEventListener('click',()=>{
     const v=el.dataset.hit, i=+v.slice(1);
     const f = v[0]==='o' ? onlineHits[i] : local[i];
     if(f) openPortion({name:f.name, basis:f.basis, per100:f.per100});
   }));
+  // Der Suchbegriff ist meistens schon der Name — den nicht zweimal tippen lassen
+  const toMan = wrap.querySelector('#btnToManual');
+  if(toMan) toMan.addEventListener('click',()=>{
+    if(!$('#mName').value.trim()) $('#mName').value = q.trim();
+    setAddPane('manual');
+  });
 }
 
-$('#btnFind').addEventListener('click',()=>{
+/* Suchen und Manuell im selben Blatt — welche Hälfte gerade dran ist */
+function setAddPane(pane){
+  const find = pane!=='manual';
+  $('#paneFind').classList.toggle('hidden', !find);
+  $('#paneManual').classList.toggle('hidden', find);
+  $$('#addSeg button').forEach(b=>b.classList.toggle('on', (b.dataset.pane!=='manual')===find));
+  $('#addTitle').textContent = find ? 'Lebensmittel suchen' : 'Manuell eintragen';
+  $('#addSub').textContent = find
+    ? `${fmt(FOODS.length)} eingebaute Einträge — sofort, ohne Netz.`
+    : 'Für alles ohne Etikett — Restaurant, Obst, Selbstgekochtes.';
+  focusSoon(find ? '#foodSearch' : '#mName', 60);
+}
+
+function openAdd(pane='find'){
   $('#foodSearch').value=''; onlineHits=[];
-  $('#dbCount').textContent=fmt(FOODS.length);
   $('#offHint').textContent='Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.';
   renderFoodResults();
+  ['mName','mKcal','mGrams','mFat','mCarbs','mSugar','mProtein'].forEach(id=>$('#'+id).value='');
+  setToggle('mSaveProd',false); $('#mSaveHint').textContent='';
+  setAddPane(pane);
   openSheet('sheetSearch');
-  focusSoon('#foodSearch');
-});
+}
+
+$('#btnAdd').addEventListener('click',()=>openAdd('find'));
+$$('#addSeg button').forEach(b=>b.addEventListener('click',()=>setAddPane(b.dataset.pane)));
 $('#foodSearch').addEventListener('input',()=>{ onlineHits=[]; renderFoodResults(); });
 
 /* ── Open Food Facts ──────────────────────────────────
@@ -1253,12 +1277,6 @@ initSaveToggle('mSaveProd', on=>{
 });
 
 /* ═══════════ Manuell ═══════════ */
-$('#btnManual').addEventListener('click',()=>{
-  ['mName','mKcal','mGrams','mFat','mCarbs','mSugar','mProtein'].forEach(id=>$('#'+id).value='');
-  setToggle('mSaveProd',false); $('#mSaveHint').textContent='';
-  openSheet('sheetManual');
-  focusSoon('#mName');
-});
 $('#btnManualAdd').addEventListener('click',()=>{
   const name=$('#mName').value.trim();
   const kcal=parseFloat($('#mKcal').value);
