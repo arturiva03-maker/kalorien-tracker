@@ -431,7 +431,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
   <div class="sheet-inner">
     <div class="grabber"></div>
     <h3 id="addTitle">Lebensmittel suchen</h3>
-    <div class="sub" id="addSub">Eingebaute Einträge — sofort, ohne Netz.</div>
+    <div class="sub hidden" id="addSub"></div>
     <div class="seg" id="addSeg">
       <button data-pane="find" class="on">Suchen</button>
       <button data-pane="manual">Manuell</button>
@@ -445,7 +445,8 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
       <div class="sheet-btns">
         <button class="btn btn-ghost btn-block" id="btnOnlineSearch">Zusätzlich online suchen</button>
       </div>
-      <div class="hint" id="offHint">Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.</div>
+      <!-- Nur für Rückmeldung nach einer Online-Suche, sonst unsichtbar -->
+      <div class="hint hidden" id="offHint"></div>
     </div>
 
     <div id="paneManual" class="hidden">
@@ -548,8 +549,7 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
     <div class="scan-status" id="barcodeStatus">Kamera wird gestartet …</div>
     <div class="hint" id="barcodeHint">Strichcode quer ins Feld halten, 10–20 cm Abstand.</div>
     <div class="field">
-      <label>Oder Nummer eintippen</label>
-      <input type="number" id="barcodeManual" inputmode="numeric" placeholder="z. B. 4001417017007">
+      <input type="number" id="barcodeManual" inputmode="numeric" placeholder="Oder Nummer eintippen" aria-label="Barcode-Nummer eintippen">
     </div>
     <div class="sheet-btns">
       <button class="btn btn-green btn-block" id="btnBarcodeLookup">Nummer nachschlagen</button>
@@ -910,6 +910,15 @@ function renderFoodResults(){
   });
 }
 
+/* Zeilen, die nur etwas zu sagen haben, wenn sie etwas zu sagen haben:
+   leerer Text heißt weg, nicht bloß leer. */
+function setLine(sel, html){
+  const el=$(sel);
+  el.innerHTML=html||'';
+  el.classList.toggle('hidden', !html);
+}
+const setOffHint = html => setLine('#offHint', html);
+
 /* Suchen und Manuell im selben Blatt — welche Hälfte gerade dran ist */
 function setAddPane(pane){
   const find = pane!=='manual';
@@ -917,15 +926,13 @@ function setAddPane(pane){
   $('#paneManual').classList.toggle('hidden', find);
   $$('#addSeg button').forEach(b=>b.classList.toggle('on', (b.dataset.pane!=='manual')===find));
   $('#addTitle').textContent = find ? 'Lebensmittel suchen' : 'Manuell eintragen';
-  $('#addSub').textContent = find
-    ? `${fmt(FOODS.length)} eingebaute Einträge — sofort, ohne Netz.`
-    : 'Für alles ohne Etikett. Pflicht ist nur die Kalorienzahl.';
+  setLine('#addSub', find ? '' : 'Für alles ohne Etikett. Pflicht ist nur die Kalorienzahl.');
   focusSoon(find ? '#foodSearch' : '#mName', 60);
 }
 
 function openAdd(pane='find'){
   $('#foodSearch').value=''; onlineHits=[];
-  $('#offHint').textContent='Online-Suche fragt Open Food Facts ab — Millionen Markenprodukte, braucht Netz.';
+  setOffHint('');
   renderFoodResults();
   ['mName','mKcal','mGrams','mFat','mCarbs','mSugar','mProtein'].forEach(id=>$('#'+id).value='');
   setToggle('mSaveProd',false); $('#mSaveHint').textContent='';
@@ -975,7 +982,7 @@ async function searchOnline(){
   const key=norm(q);
   if(offCache[key]){
     onlineHits=offCache[key];
-    $('#offHint').textContent=`${onlineHits.length} Treffer aus dem Zwischenspeicher · Daten von Open Food Facts (ODbL)`;
+    setOffHint(`${onlineHits.length} Treffer aus dem Zwischenspeicher · Daten von Open Food Facts (ODbL)`);
     renderFoodResults(); return;
   }
   const wait = OFF_GAP - (Date.now()-offLast());
@@ -983,7 +990,7 @@ async function searchOnline(){
 
   const btn=$('#btnOnlineSearch');
   btn.disabled=true; btn.textContent='Suche …';
-  $('#offHint').textContent='Frage Open Food Facts …';
+  setOffHint('Frage Open Food Facts …');
   offStamp();
   try{
     const url='https://de.openfoodfacts.org/cgi/search.pl'
@@ -999,12 +1006,12 @@ async function searchOnline(){
     if(keys.length>60) keys.slice(0,keys.length-60).forEach(k=>delete offCache[k]);
     save(LS.offCache, offCache);
 
-    $('#offHint').textContent = onlineHits.length
+    setOffHint(onlineHits.length
       ? `${onlineHits.length} Online-Treffer · Daten von Open Food Facts (ODbL)`
-      : 'Online nichts Brauchbares gefunden — viele Einträge dort haben keine Nährwerte.';
+      : 'Online nichts Brauchbares gefunden — viele Einträge dort haben keine Nährwerte.');
   }catch(err){
     console.warn('Open Food Facts:',err);
-    $('#offHint').innerHTML='<b>Online-Suche fehlgeschlagen.</b> Kein Netz oder die API ist gerade dicht.';
+    setOffHint('<b>Online-Suche fehlgeschlagen.</b> Kein Netz oder die API ist gerade dicht.');
   }finally{
     btn.disabled=false; btn.textContent='Zusätzlich online suchen';
     renderFoodResults();
