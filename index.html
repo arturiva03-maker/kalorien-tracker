@@ -174,6 +174,10 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
 .field input:focus{outline:3px solid var(--coral-soft)}
 .nutri-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 .nutri-grid .field input{padding:10px 12px}
+/* Im Manuell-Raster trägt der Platzhalter die Beschriftung — kleiner gesetzt,
+   damit „Kohlenhydrate (g)" auch auf schmalen Geräten ganz hineinpasst und
+   sich der Hinweis vom eingetippten Wert unterscheidet. */
+#paneManual .nutri-grid input::placeholder{font-size:.8rem}
 .nutri-grid .field.missing input{border-color:var(--coral);background:var(--coral-soft)}
 .nutri-grid .field.missing label{color:var(--coral)}
 .hint{font-size:.75rem;color:var(--muted);margin:6px 0 14px}
@@ -445,17 +449,18 @@ body.sheet-open{position:fixed;left:0;right:0;width:100%;overflow:hidden}
     </div>
 
     <div id="paneManual" class="hidden">
+      <!-- Beschriftung steckt im Feld statt darüber: die Versalien-Labels
+           brachen umständlich um und schoben die Rasterreihen auseinander. -->
       <div class="field">
-        <label>Was?</label>
-        <input type="text" id="mName" placeholder="z. B. Banane">
+        <input type="text" id="mName" placeholder="Was hast du gegessen?" aria-label="Was hast du gegessen?">
       </div>
       <div class="nutri-grid">
-        <div class="field"><label>Kalorien (kcal)</label><input type="number" id="mKcal" inputmode="decimal" placeholder="105"></div>
-        <div class="field"><label>Menge (g, optional)</label><input type="number" id="mGrams" inputmode="decimal" placeholder="120"></div>
-        <div class="field"><label>Fett (g, optional)</label><input type="number" id="mFat" inputmode="decimal"></div>
-        <div class="field"><label>Kohlenhydrate (g, opt.)</label><input type="number" id="mCarbs" inputmode="decimal"></div>
-        <div class="field"><label>Zucker (g, optional)</label><input type="number" id="mSugar" inputmode="decimal"></div>
-        <div class="field"><label>Eiweiß (g, optional)</label><input type="number" id="mProtein" inputmode="decimal"></div>
+        <div class="field"><input type="number" id="mKcal" inputmode="decimal" placeholder="Kalorien (kcal)" aria-label="Kalorien (kcal)"></div>
+        <div class="field"><input type="number" id="mGrams" inputmode="decimal" placeholder="Menge (g)" aria-label="Menge in Gramm, optional"></div>
+        <div class="field"><input type="number" id="mFat" inputmode="decimal" placeholder="Fett (g)" aria-label="Fett in Gramm, optional"></div>
+        <div class="field"><input type="number" id="mCarbs" inputmode="decimal" placeholder="Kohlenhydrate (g)" aria-label="Kohlenhydrate in Gramm, optional"></div>
+        <div class="field"><input type="number" id="mSugar" inputmode="decimal" placeholder="Zucker (g)" aria-label="Zucker in Gramm, optional"></div>
+        <div class="field"><input type="number" id="mProtein" inputmode="decimal" placeholder="Eiweiß (g)" aria-label="Eiweiß in Gramm, optional"></div>
       </div>
       <button class="save-toggle" id="mSaveProd" aria-pressed="false">
         <span class="box"><svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>
@@ -878,10 +883,7 @@ function renderFoodResults(){
   const q=$('#foodSearch').value;
   const local=searchFoods(q);
   const wrap=$('#foodResults');
-  if(!q.trim()){
-    wrap.innerHTML=`<div class="empty" style="padding:22px 18px">Tippe los — z. B. „Quark", „Reis" oder „Salami".</div>`;
-    return;
-  }
+  if(!q.trim()){ wrap.innerHTML=''; return; }   // leer statt Platzhalterkasten
   const row=(f,i,online)=>`
     <div class="entry tap" data-hit="${online?'o':'l'}${i}">
       <div class="e-name"><b>${esc(f.name)}</b><span>F ${fmt1(f.per100.fat)} · KH ${fmt1(f.per100.carbs)} · E ${fmt1(f.per100.protein)}</span></div>
@@ -917,7 +919,7 @@ function setAddPane(pane){
   $('#addTitle').textContent = find ? 'Lebensmittel suchen' : 'Manuell eintragen';
   $('#addSub').textContent = find
     ? `${fmt(FOODS.length)} eingebaute Einträge — sofort, ohne Netz.`
-    : 'Für alles ohne Etikett — Restaurant, Obst, Selbstgekochtes.';
+    : 'Für alles ohne Etikett. Pflicht ist nur die Kalorienzahl.';
   focusSoon(find ? '#foodSearch' : '#mName', 60);
 }
 
